@@ -5,6 +5,8 @@ from scipy import signal, sparse
 from scipy.sparse.linalg import spsolve
 import matplotlib.pyplot as plt
 from scipy.signal import hilbert, firwin, lfilter
+from scipy.ndimage import gaussian_filter1d
+import pywt
 
 class RamanDenoiser:
     def __init__(self, wavenumbers=None, intensities=None):
@@ -19,7 +21,14 @@ class RamanDenoiser:
         self.baseline = None
 
     def clone(self):
-        return type(self)(self.wavenumbers.copy(), self.intensities.copy())
+        '''Returns a deep copy of the denoiser in its current state.'''
+        new = type(self)()
+        new.wavenumbers = self.wavenumbers.copy()
+        new.intensities = self.intensities.copy()
+        new.processed = self.processed.copy()
+        new.processed_wavenumbers = self.processed_wavenumbers.copy()
+        new.baseline = self.baseline.copy()
+        return new
     
     @classmethod
     def from_csv(cls, filepath, wavenumber_col=0, intensity_col=1, skiprows=0):
@@ -55,27 +64,20 @@ class RamanDenoiser:
             window_length, 
             polyorder
         )
-        return self.processed
     
     def gaussian_filter(self, sigma=2):
-        from scipy.ndimage import gaussian_filter1d
         self.processed = gaussian_filter1d(self.intensities, sigma)
-        return self.processed
     
     def median_filter(self, kernel_size=5):
         self.processed = signal.medfilt(self.intensities, kernel_size)
-        return self.processed
     
     def wiener_filter(self, noise_power=None):
         self.processed = signal.wiener(self.intensities, mysize=5, noise=noise_power)
-        return self.processed
     
     def fir_filter(self, cutoff_freq=0.1, numtaps=51, window='hamming'):
         fir_coeff = firwin(numtaps, cutoff_freq, window=window)
         
         self.processed = lfilter(fir_coeff, 1.0, self.processed)
-        
-        return self.processed
     
     def hilbert_vibration_decomposition(self, num_components=3):
         data = self.processed if self.processed is not None else self.intensities
@@ -100,12 +102,6 @@ class RamanDenoiser:
         return self.hvd_results
     
     def wavelet_denoise(self, wavelet='sym4', level=None, threshold_mode='soft'):
-        try:
-            import pywt
-        except ImportError:
-            print("PyWavelets not installed. Install with: pip install PyWavelets")
-            return self.intensities
-        
         data = self.processed
         
         if level is None:
@@ -124,7 +120,6 @@ class RamanDenoiser:
 
         # recounstruction, maybe take out
         self.processed = pywt.waverec(coeffs_thresh, wavelet)[:len(data)]
-        return self.processed
     
     def als_baseline(self, lam=1e6, p=0.01, niter=10):
         data = self.processed if self.processed is not None else self.intensities
@@ -140,7 +135,6 @@ class RamanDenoiser:
         
         self.baseline = baseline
         self.processed = data - baseline
-        return self.processed
     
     def polynomial_baseline(self, degree=3):
         data = self.processed if self.processed is not None else self.intensities
@@ -148,7 +142,6 @@ class RamanDenoiser:
         baseline = np.polyval(coeffs, self.wavenumbers)
         self.baseline = baseline
         self.processed = data - baseline
-        return self.processed
     
     def normalize(self, method='max'):
         data = self.processed if self.processed is not None else self.intensities
@@ -159,8 +152,6 @@ class RamanDenoiser:
             self.processed = data / np.trapz(data, self.wavenumbers)
         elif method == 'minmax':
             self.processed = (data - np.min(data)) / (np.max(data) - np.min(data))
-        
-        return self.processed
 
     def trim(self, low=None, high=None):
         if low == None:
@@ -170,7 +161,11 @@ class RamanDenoiser:
         mask = low < self.wavenumbers
         self.processed = self.processed[mask]
         self.processed_wavenumbers = self.wavenumbers[mask]
-        return self.processed
+
+    def subtract_blank(self, blank, factor=2):
+        if self.processed_wavenumbers != blank.processed_wavenumbers:
+            raise ValueError('Wavenumber lists of operands do not match')
+        self.processed = np.maximum(self.processed - blank.processed * factor, 0)
     
     def find_peaks(self, prominence=None, distance=10, height=None, width=None, auto_adapt=True):
         # find peaks in the spectrum
@@ -225,7 +220,7 @@ class RamanDenoiser:
         
         return peak_data_sorted
 
-    def plot_comparison(self, title="Raman Spectrum Processing", show_peak_labels=True, display=True):
+    def plot_comparison(self, title="Raman Spectrum Processing", show_peak_labels=True):
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
         
         ax1.plot(self.wavenumbers, self.intensities, 'b-', linewidth=1, alpha=0.7)
@@ -271,10 +266,8 @@ class RamanDenoiser:
         ax2.set_ylabel('Intensity (a.u.)')
         ax2.set_title('Processed Spectrum')
         ax2.grid(True, alpha=0.3)
-        
-        if display:
-            plt.tight_layout()
-            plt.show()
+        plt.tight_layout()
+        plt.show()
 
     def classify_peaks(self, peaks, properties):
         return ['strong' for _ in peaks]
@@ -287,19 +280,8 @@ class RamanDenoiser:
         })
         df.to_csv(filepath, index=False)
         print(f"saved processed data to {filepath}")
-    
-    #plot less noisy plot
-    denoiser.plot_comparison()
-    denoiser.save_processed(sys.argv[1][:-4] + '-processed.csv')
 
-if __name__ == "__main__":
-    #load csv
-    denoiser = RamanDenoiser.from_csv(
-        sys.argv[1],
-        wavenumber_col=1, 
-        intensity_col=3,
-        skiprows=5
-    )
+def raman_analysis(denoiser):
     denoiser.als_baseline(lam=1e5, p=0.01)
     denoiser.fir_filter(cutoff_freq=0.1, numtaps=51)
     #denoiser.wavelet_denoise(wavelet='db4', threshold_mode='soft', level=3)
@@ -308,5 +290,25 @@ if __name__ == "__main__":
     #peaks, properties = denoiser.find_peaks(prominence=0.1, distance=20)
     #print(f"Found {len(peaks)} peaks")
 
+if __name__ == "__main__":
+    #load csv
+    spectrum = RamanDenoiser.from_csv(
+        sys.argv[1],
+        wavenumber_col=1,
+        intensity_col=3,
+        skiprows=5
+    )
+    blank = RamanDenoiser.from_csv(
+        sys.argv[2],
+        wavenumber_col=1,
+        intensity_col=3,
+        skiprows=5
+    )
 
+    raman_analysis(spectrum)
+    raman_analysis(blank)
+    spectrum.subtract_blank(blank)
 
+    #plot less noisy plot
+    spectrum.plot_comparison()
+    spectrum.save_processed(sys.argv[1][:-4] + '-processed.csv')
