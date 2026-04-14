@@ -54,8 +54,7 @@ class RamanDenoiser:
             return cls(wavenumbers, intensities)
             
         except Exception as e:
-            print(f"Error loading CSV: {e}")
-            return None
+            raise Exception("Error loading CSV") from e
     
     def savitzky_golay(self, window_length=11, polyorder=3):
         if window_length % 2 == 0:
@@ -144,9 +143,8 @@ class RamanDenoiser:
         elif method == 'area':
             self.processed = self.processed / np.trapz(self.processed, self.wavenumbers)
         elif method == 'minmax':
-            self.processed = (self.processed - np.min(self.processed))
+            self.processed = (self.processed - np.min(self.processed)) \
                 / (np.max(self.processed) - np.min(self.processed))
-
     def trim(self, low=None, high=None):
         if low == None:
             low = float('-inf')
@@ -157,7 +155,7 @@ class RamanDenoiser:
         self.processed_wavenumbers = self.wavenumbers[mask]
 
     def subtract_blank(self, blank, factor=2):
-        if self.processed_wavenumbers != blank.processed_wavenumbers:
+        if np.any(self.processed_wavenumbers != blank.processed_wavenumbers):
             raise ValueError('Wavenumber lists of operands do not match')
         self.processed = np.maximum(self.processed - blank.processed * factor, 0)
     
@@ -210,17 +208,20 @@ class RamanDenoiser:
         
         return peak_data_sorted
 
-    def plot_comparison(self, title="Raman Spectrum Processing", show_peak_labels=True):
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+    def plot_comparison(self, title="Raman Spectrum Processing", show_peak_labels=True, axs=None, defer=False, label=None, filename="spectrum.png"):
+        if axs:
+            fig, ax1, ax2 = axs
+        else:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
         
-        ax1.plot(self.wavenumbers, self.intensities, 'b-', linewidth=1, alpha=0.7)
+        ax1.plot(self.wavenumbers, self.intensities, '-', linewidth=1, alpha=0.7, label=label)
         ax1.set_xlabel('Raman Shift (cm⁻¹)')
         ax1.set_ylabel('Intensity (a.u.)')
         ax1.set_title('Original Spectrum')
         ax1.grid(True, alpha=0.3)
         
         if self.processed is not None:
-            ax2.plot(self.processed_wavenumbers, self.processed, 'r-', linewidth=1.5)
+            ax2.plot(self.processed_wavenumbers, self.processed, '-', linewidth=1.5, label=label)
             
             try:
                 peaks, properties = self.find_peaks(auto_adapt=True)
@@ -255,15 +256,20 @@ class RamanDenoiser:
         ax2.set_ylabel('Intensity (a.u.)')
         ax2.set_title('Processed Spectrum')
         ax2.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.show()
+        if not defer:
+            ax1.legend()
+            ax2.legend()
+            plt.tight_layout()
+            plt.show()
+            fig.savefig(filename, dpi=300)
+        return fig, ax1, ax2
 
     def classify_peaks(self, peaks, properties):
         return ['strong' for _ in peaks]
     
     def save_processed(self, filepath):
         df = pd.DataFrame({
-            'wavenumber': self.wavenumbers,
+            'wavenumber': self.processed_wavenumbers,
             'intensity': self.processed
         })
         df.to_csv(filepath, index=False)
@@ -273,7 +279,7 @@ def raman_analysis(denoiser):
     denoiser.als_baseline(lam=1e5, p=0.01)
     denoiser.fir_filter(cutoff_freq=0.1, numtaps=51)
     #denoiser.wavelet_denoise(wavelet='db4', threshold_mode='soft', level=3)
-    denoiser.trim(low=1000)
+    denoiser.trim(low=700)
     denoiser.normalize(method='max')
     #peaks, properties = denoiser.find_peaks(prominence=0.1, distance=20)
     #print(f"Found {len(peaks)} peaks")
@@ -295,8 +301,10 @@ if __name__ == "__main__":
 
     raman_analysis(spectrum)
     raman_analysis(blank)
-    spectrum.subtract_blank(blank)
+    blank_subtracted = spectrum.clone()
+    blank_subtracted.subtract_blank(blank)
 
     #plot less noisy plot
-    spectrum.plot_comparison()
+    axs = spectrum.plot_comparison(defer=True, label="No blank sub")
+    blank_subtracted.plot_comparison(axs=axs, label="Blank subtracted", filename=sys.argv[1][:-4] + '-processed.png')
     spectrum.save_processed(sys.argv[1][:-4] + '-processed.csv')
