@@ -1,9 +1,26 @@
 rom time import sleep
 from serial import Serial
 import numpy as np
+from serial.tools import list_ports
+import matplotlib.pyplot as plt
 
-# TODO checksum, support averaging, throw error when port isn't found, etc.
-PORT = "/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_A=CPb11A920-if00-port0"
+# def find_port():
+#     ports = list_ports.comports()
+#     for p in ports:
+#         name = p.device
+#         # Mac: /dev/tty.usbserial-* or /dev/tty.usbmodem-*
+#         # Linux: /dev/ttyUSB* or /dev/ttyACM*
+#         if any(pat in name for pat in ("usbserial", "usbmodem", "ttyUSB", "ttyACM")):
+#             print(f"Using port: {name}")
+#             return name
+#     raise RuntimeError("No serial port found")
+
+# PORT = find_port()
+
+from serial.tools import list_ports
+port = list(list_ports.comports())
+for p in port:
+    print(p.device)
 
 # write bytes with delay
 def _writeline(ser, data, delay=0.05):
@@ -69,7 +86,7 @@ def _decode_spectrometer_data(data):
     return np.array(output)
 
 def read_spectrometer(integration_time):
-    with Serial(PORT, 9600, timeout=1) as ser:
+    with Serial(port, 9600, timeout=1) as ser:
         _writeline(ser, "Q")  # reset settings
         _writeline(ser, "K0")  # raise baudrate
         ser.baudrate = 115200
@@ -80,4 +97,18 @@ def read_spectrometer(integration_time):
         _writeline(ser, "S")  # request data
         data = ser.read(5000)  # read data, should never be more than 4096
         _writeline(ser, "Q")  # reset settings
-        return _decode_data(data)  # get numbers
+        return _decode_spectrometer_data(data)  # get numbers
+
+def plot_spectrum(integration_time):
+    data = read_spectrometer(integration_time)
+    pixels = range(len(data))  # x-axis: pixel index (0–2047)
+    
+    plt.figure(figsize=(10, 4))
+    plt.plot(pixels, data)
+    plt.xlabel("Pixel")
+    plt.ylabel("Intensity (counts)")
+    plt.title(f"Spectrometer Readout (integration time: {integration_time})")
+    plt.tight_layout()
+    plt.show()
+
+plot_spectrum(1000)  # 1000ms integration time, adjust as needed
