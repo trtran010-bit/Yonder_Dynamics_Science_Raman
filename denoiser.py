@@ -152,7 +152,7 @@ class RamanDenoiser:
         elif method == 'area':
             self.intensities /= np.trapz(self.intensities, self.wavenumbers)
         elif method == 'minmax':
-            self.intensities = ((self.intensities - np.min(self.intensities))
+            self.intensities = ((self.intensities - np.min(self.intensities)) \
                 / (np.max(self.intensities) - np.min(self.intensities)))
 
     def trim(self, low=float('-inf'), high=float('inf')):
@@ -161,7 +161,7 @@ class RamanDenoiser:
         self.wavenumbers = self.wavenumbers[mask]
 
     def subtract_blank(self, blank, factor=2):
-        if (self.wavenumbers != blank.wavenumbers).any():
+        if np.any(self.processed_wavenumbers != blank.processed_wavenumbers):
             raise ValueError('Wavenumber lists of operands do not match')
         self.intensities = np.maximum(self.intensities - blank.intensities * factor, 0)
 
@@ -214,17 +214,20 @@ class RamanDenoiser:
 
         return peak_data_sorted
 
-    def plot_comparison(self, title="Raman Spectrum Processing", show_peak_labels=True):
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+<<<<<<< HEAD
+    def plot_comparison(self, title="Raman Spectrum Processing", show_peak_labels=True, fig_axs=None, defer=False, label=None):
+        if fig_axs:
+            fig, (ax1, ax2) = fig_axs
+        else:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
 
-        ax1.plot(self.initial_wavenumbers, self.initial_intensities, 'b-', linewidth=1, alpha=0.7)
+        ax1.plot(self.initial_wavenumbers, self.initial_intensities, '-', linewidth=1, alpha=0.7)
         ax1.set_xlabel('Raman Shift (cm⁻¹)')
         ax1.set_ylabel('Intensity (a.u.)')
         ax1.set_title('Original Spectrum')
         ax1.grid(True, alpha=0.3)
 
-        ax2.plot(self.wavenumbers, self.intensities, 'r-', linewidth=1.5)
-
+        ax2.plot(self.wavenumbers, self.intensities, '-', linewidth=1.5, label=label)
         try:
             peaks, properties = self.find_peaks(auto_adapt=True)
             classifications = self.classify_peaks(peaks, properties)
@@ -274,7 +277,7 @@ def raman_analysis(denoiser):
     denoiser.als_baseline(lam=1e5, p=0.01)
     denoiser.fir_filter(cutoff_freq=0.1, numtaps=51)
     #denoiser.wavelet_denoise(wavelet='db4', threshold_mode='soft', level=3)
-    denoiser.trim(low=1000)
+    denoiser.trim(low=700)
     denoiser.normalize(method='max')
     #peaks, properties = denoiser.find_peaks(prominence=0.1, distance=20)
     #print(f"Found {len(peaks)} peaks")
@@ -291,6 +294,7 @@ if __name__ == "__main__":
         skiprows=5
     )
     raman_analysis(spectrum)
+    fig, axs = spectrum.plot_comparison(label=("No blank sub" if args.blank else None))
 
     if args.blank is not None:
         blank = RamanDenoiser.from_csv(
@@ -300,12 +304,13 @@ if __name__ == "__main__":
             skiprows=5
         )
         raman_analysis(blank)
-        spectrum.subtract_blank(blank)
+        blank_subtracted = spectrum.clone()
+        blank_subtracted.subtract_blank(blank)
+        blank_subtracted.plot_comparison(fig_axs=(fig, axs), label="Blank subtracted")
 
-    fig, (ax1, ax2) = spectrum.plot_comparison()
-    graphpath = spectrum_basename + "-graph.png"
-    fig.savefig(graphpath)
-    spectrum.save_to_file(spectrum_basename + '-spectrum.csv')
+    fig.tight_layout()
+    fig.savefig(spectrum_basename + '-graph.png')
     print(f"saved figure to {graphpath}")
+    spectrum.save_to_file(spectrum_basename + '-spectrum.csv')
     if args.show_graph:
         plt.show()
