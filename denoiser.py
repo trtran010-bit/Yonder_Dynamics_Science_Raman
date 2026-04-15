@@ -8,6 +8,7 @@ if __name__ == '__main__':
     )
     parser.add_argument('spectrum', help='Spectrum Studio CSV of analyte spectrum')
     parser.add_argument('blank', nargs='?', help='Spectrum Studio CSV of blank spectrum')
+    parser.add_argument('--no-show', dest='show_graph', action='store_false', help='Do not show the graph onscreen')
     args = parser.parse_args()
 
 from matplotlib.lines import Line2D
@@ -24,23 +25,21 @@ import sys
 class RamanDenoiser:
     def __init__(self, wavenumbers=None, intensities=None):
         if wavenumbers is not None and intensities is not None:
-            self.wavenumbers = np.array(wavenumbers)
-            self.intensities = np.array(intensities)
+            self.initial_wavenumbers = np.array(wavenumbers)
+            self.initial_intensities = np.array(intensities)
         else:
             self.wavenumbers = None
             self.intensities = None
-        self.processed = self.intensities
-        self.processed_wavenumbers = self.wavenumbers
-        self.baseline = None
+        self.intensities = self.initial_intensities
+        self.wavenumbers = self.initial_wavenumbers
 
     def clone(self):
         '''Returns a deep copy of the denoiser in its current state.'''
         new = type(self)()
+        new.initial_wavenumbers = self.initial_wavenumbers.copy()
+        new.initial_intensities = self.initial_intensities.copy()
         new.wavenumbers = self.wavenumbers.copy()
         new.intensities = self.intensities.copy()
-        new.processed = self.processed.copy()
-        new.processed_wavenumbers = self.processed_wavenumbers.copy()
-        new.baseline = self.baseline.copy()
         return new
 
     @classmethod
@@ -66,41 +65,40 @@ class RamanDenoiser:
             return cls(wavenumbers, intensities)
 
         except Exception as e:
-            print(f"Error loading CSV: {e}")
-            return None
+            raise Exception(f"Error loading CSV '{filepath}'") from e
 
     def savitzky_golay(self, window_length=11, polyorder=3):
         if window_length % 2 == 0:
             window_length += 1
-        self.processed = signal.savgol_filter(
+        self.intensities = signal.savgol_filter(
             self.intensities,
             window_length,
             polyorder
         )
 
     def gaussian_filter(self, sigma=2):
-        self.processed = gaussian_filter1d(self.intensities, sigma)
+        self.intensities = gaussian_filter1d(self.intensities, sigma)
 
     def median_filter(self, kernel_size=5):
-        self.processed = signal.medfilt(self.intensities, kernel_size)
+        self.intensities = signal.medfilt(self.intensities, kernel_size)
 
     def wiener_filter(self, noise_power=None):
-        self.processed = signal.wiener(self.intensities, mysize=5, noise=noise_power)
+        self.intensities = signal.wiener(self.intensities, mysize=5, noise=noise_power)
 
     def fir_filter(self, cutoff_freq=0.1, numtaps=51, window='hamming'):
         fir_coeff = firwin(numtaps, cutoff_freq, window=window)
 
-        self.processed = lfilter(fir_coeff, 1.0, self.processed)
+        self.intensities = lfilter(fir_coeff, 1.0, self.intensities)
 
     def hilbert_vibration_decomposition(self, num_components=3):
         #hilbert transform method
-        analytic_signal = hilbert(self.processed)
+        analytic_signal = hilbert(self.intensities)
         amplitude_envelope = np.abs(analytic_signal)
         instantaneous_phase = np.unwrap(np.angle(analytic_signal))
         instantaneous_frequency = np.diff(instantaneous_phase) / (2.0 * np.pi)
 
         #storing denoiser signal
-        self.processed = amplitude_envelope
+        self.intensities = amplitude_envelope
 
         #decomposition results
         self.hvd_results = {
@@ -114,64 +112,58 @@ class RamanDenoiser:
 
     def wavelet_denoise(self, wavelet='sym4', level=None, threshold_mode='soft'):
         if level is None:
-            level = int(np.log2(len(self.processed))) - 1
+            level = int(np.log2(len(self.intensities))) - 1
 
         #wavelet decomposition
-        coeffs = pywt.wavedec(self.processed, wavelet, level=level)
+        coeffs = pywt.wavedec(self.intensities, wavelet, level=level)
 
         #calculate threshold using MAD (Median Absolute Deviation)
         sigma = np.median(np.abs(coeffs[-level])) / 0.6745
-        threshold = sigma * np.sqrt(2 * np.log(len(self.processed)))
+        threshold = sigma * np.sqrt(2 * np.log(len(self.intensities)))
 
         coeffs_thresh = [coeffs[0]]
         for i in range(1, len(coeffs)):
             coeffs_thresh.append(pywt.threshold(coeffs[i], threshold, mode=threshold_mode))
 
         # recounstruction
-        self.processed = pywt.waverec(coeffs_thresh, wavelet)[:len(self.processed)]
+        self.intensities = pywt.waverec(coeffs_thresh, wavelet)[:len(self.intensities)]
 
     def als_baseline(self, lam=1e6, p=0.01, niter=10):
-        L = len(self.processed)
-        D = sparse.diags([1, -2, 1], [0, -1, -2], shape=(L, L-2))
+        L = len(self.intensities)
+        D = sparse.diags([1, -2, 1], [0, -1, -2], shape=(L, L-2), dtype=np.float64)
         w = np.ones(L)
 
         for i in range(niter):
             W = sparse.spdiags(w, 0, L, L)
             Z = W + lam * D.dot(D.transpose())
-            baseline = spsolve(Z, w * self.processed)
-            w = p * (self.processed > baseline) + (1 - p) * (self.processed < baseline)
+            baseline = spsolve(Z, w * self.intensities)
+            w = p * (self.intensities > baseline) + (1 - p) * (self.intensities < baseline)
 
-        self.baseline = baseline
-        self.processed = self.processed - baseline
+        self.intensities -= baseline
 
     def polynomial_baseline(self, degree=3):
-        coeffs = np.polyfit(self.processed_wavenumbers, self.processed, degree)
-        baseline = np.polyval(coeffs, self.processed_wavenumbers)
-        self.baseline = baseline
-        self.processed = self.processed - baseline
+        coeffs = np.polyfit(self.wavenumbers, self.intensities, degree)
+        baseline = np.polyval(coeffs, self.wavenumbers)
+        self.intensities -= baseline
 
     def normalize(self, method='max'):
         if method == 'max':
-            self.processed = self.processed / np.max(self.processed)
+            self.intensities /= np.max(self.intensities)
         elif method == 'area':
-            self.processed = self.processed / np.trapz(self.processed, self.processed_wavenumbers)
+            self.intensities /= np.trapz(self.intensities, self.wavenumbers)
         elif method == 'minmax':
-            self.processed = ((self.processed - np.min(self.processed))
-                / (np.max(self.processed) - np.min(self.processed)))
+            self.intensities = ((self.intensities - np.min(self.intensities))
+                / (np.max(self.intensities) - np.min(self.intensities)))
 
-    def trim(self, low=None, high=None):
-        if low == None:
-            low = float('-inf')
-        if high == None:
-            high = float('inf')
-        mask = low < self.processed_wavenumbers
-        self.processed = self.processed[mask]
-        self.processed_wavenumbers = self.processed_wavenumbers[mask]
+    def trim(self, low=float('-inf'), high=float('inf')):
+        mask = (low <= self.wavenumbers) & (self.wavenumbers <= high)
+        self.intensities = self.intensities[mask]
+        self.wavenumbers = self.wavenumbers[mask]
 
     def subtract_blank(self, blank, factor=2):
-        if (self.processed_wavenumbers != blank.processed_wavenumbers).any():
+        if (self.wavenumbers != blank.wavenumbers).any():
             raise ValueError('Wavenumber lists of operands do not match')
-        self.processed = np.maximum(self.processed - blank.processed * factor, 0)
+        self.intensities = np.maximum(self.intensities - blank.intensities * factor, 0)
 
     def find_peaks(self, prominence=None, distance=10, height=None, width=None, auto_adapt=True):
         # find peaks in the spectrum
@@ -179,17 +171,17 @@ class RamanDenoiser:
         if auto_adapt and prominence is None:
             # calculate adaptive prominence based on noise level
             # using the standard deviation of the baseline region as noise estimate
-            noise_std = np.std(self.processed[:int(len(self.processed)*0.1)])
-            prominence = max(3 * noise_std, 0.05 * np.max(self.processed))
+            noise_std = np.std(self.intensities[:int(len(self.intensities)*0.1)])
+            prominence = max(3 * noise_std, 0.05 * np.max(self.intensities))
             print(f"auto-detected prominence: {prominence:.4f}")
 
         if auto_adapt and height is None:
             # set minimum height as mean + 2*std
-            height = np.mean(self.processed) + 2 * np.std(self.processed)
+            height = np.mean(self.intensities) + 2 * np.std(self.intensities)
             print(f"auto-detected height threshold: {height:.4f}")
 
         peaks, properties = signal.find_peaks(
-            self.processed, prominence=prominence, distance=distance, height=height, width=width
+            self.intensities, prominence=prominence, distance=distance, height=height, width=width
         )
 
         return peaks, properties
@@ -199,10 +191,10 @@ class RamanDenoiser:
         # completely unbiased peak detection so we can find ALL local maxima above minimal threshold
         # min_prominence_ratio: fraction of max intensity (e.g., 0.01 = 1% of max signal)
         # this way you see everything and can decide what matters for your material
-        min_prominence = min_prominence_ratio * np.max(self.processed)
+        min_prominence = min_prominence_ratio * np.max(self.intensities)
 
         peaks, properties = signal.find_peaks(
-            self.processed,
+            self.intensities,
             prominence=min_prominence,
             distance=min_distance
 
@@ -212,10 +204,10 @@ class RamanDenoiser:
         for i, peak_idx in enumerate(peaks):
             peak_data.append({
                 'index': peak_idx,
-                'wavenumber': self.processed_wavenumbers[peak_idx],
-                'intensity': self.processed[peak_idx],
+                'wavenumber': self.wavenumbers[peak_idx],
+                'intensity': self.intensities[peak_idx],
                 'prominence': properties['prominences'][i],
-                'relative_intensity': self.processed[peak_idx] / np.max(self.processed)
+                'relative_intensity': self.intensities[peak_idx] / np.max(self.intensities)
             })
 
         peak_data_sorted = sorted(peak_data, key=lambda x: x['intensity'], reverse=True)
@@ -225,13 +217,13 @@ class RamanDenoiser:
     def plot_comparison(self, title="Raman Spectrum Processing", show_peak_labels=True):
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
 
-        ax1.plot(self.wavenumbers, self.intensities, 'b-', linewidth=1, alpha=0.7)
+        ax1.plot(self.initial_wavenumbers, self.initial_intensities, 'b-', linewidth=1, alpha=0.7)
         ax1.set_xlabel('Raman Shift (cm⁻¹)')
         ax1.set_ylabel('Intensity (a.u.)')
         ax1.set_title('Original Spectrum')
         ax1.grid(True, alpha=0.3)
 
-        ax2.plot(self.processed_wavenumbers, self.processed, 'r-', linewidth=1.5)
+        ax2.plot(self.wavenumbers, self.intensities, 'r-', linewidth=1.5)
 
         try:
             peaks, properties = self.find_peaks(auto_adapt=True)
@@ -239,12 +231,12 @@ class RamanDenoiser:
 
             colors = {'strong': 'darkgreen', 'medium': 'orange', 'weak': 'lightblue'}
             for peak, classification in zip(peaks, classifications):
-                ax2.plot(self.processed_wavenumbers[peak], self.processed[peak], 'o',
+                ax2.plot(self.wavenumbers[peak], self.intensities[peak], 'o',
                         color=colors[classification], markersize=8)
 
                 if show_peak_labels and classification in ['strong', 'medium']:
-                    ax2.text(self.processed_wavenumbers[peak], self.processed[peak],
-                           f'{self.processed_wavenumbers[peak]:.0f}',
+                    ax2.text(self.wavenumbers[peak], self.intensities[peak],
+                           f'{self.wavenumbers[peak]:.0f}',
                            fontsize=8, ha='center', va='bottom')
 
             # legend
@@ -265,18 +257,18 @@ class RamanDenoiser:
         ax2.set_title('Processed Spectrum')
         ax2.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.show()
+        return fig, (ax1, ax2)
 
     def classify_peaks(self, peaks, properties):
         return ['strong' for _ in peaks]
 
-    def save_processed(self, filepath):
+    def save_to_file(self, filepath):
         df = pd.DataFrame({
-            'wavenumber': self.processed_wavenumbers,
-            'intensity': self.processed
+            'wavenumber': self.wavenumbers,
+            'intensity': self.intensities
         })
         df.to_csv(filepath, index=False)
-        print(f"saved processed data to {filepath}")
+        print(f"saved processed spectrum to {filepath}")
 
 def raman_analysis(denoiser):
     denoiser.als_baseline(lam=1e5, p=0.01)
@@ -288,7 +280,10 @@ def raman_analysis(denoiser):
     #print(f"Found {len(peaks)} peaks")
 
 if __name__ == "__main__":
-    #load csv
+    spectrum_fn_split = args.spectrum.split('.')
+    spectrum_basename = '.'.join(
+        spectrum_fn_split[slice(None, -1 if len(spectrum_fn_split) > 1 else None)]
+    )
     spectrum = RamanDenoiser.from_csv(
         args.spectrum,
         wavenumber_col=1,
@@ -307,10 +302,10 @@ if __name__ == "__main__":
         raman_analysis(blank)
         spectrum.subtract_blank(blank)
 
-    #plot less noisy plot
-    spectrum.plot_comparison()
-    spectrum_fn_split = args.spectrum.split('.')
-    spectrum_basename = '.'.join(
-        spectrum_fn_split[slice(None, -1 if len(spectrum_fn_split) > 1 else None)]
-    )
-    spectrum.save_processed(spectrum_basename + '-processed.csv')
+    fig, (ax1, ax2) = spectrum.plot_comparison()
+    graphpath = spectrum_basename + "-graph.png"
+    fig.savefig(graphpath)
+    spectrum.save_to_file(spectrum_basename + '-spectrum.csv')
+    print(f"saved figure to {graphpath}")
+    if args.show_graph:
+        plt.show()
