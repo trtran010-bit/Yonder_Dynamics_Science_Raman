@@ -1,15 +1,49 @@
 import argparse
 
+def pos_int(v):
+    v = int(v)
+    if v <= 0:
+        raise ValueError
+    return v
+
 # Imports take ~2 seconds, so don't bother if the command line is wrong
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         prog='raman_analyze',
         description='Analyzes Raman spectrography data',
     )
-    parser.add_argument('spectrum', help='Spectrum Studio CSV of analyte spectrum')
-    parser.add_argument('blank', nargs='?', help='Spectrum Studio CSV of blank spectrum')
-    parser.add_argument('--no-show', dest='show_graph', action='store_false', help='Do not show the graph onscreen')
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument(
+        '-s', '--from-spec',
+        action='store_true',
+        help='Read data from the spectrometer',
+    )
+    input_group.add_argument(
+        '-f', '--spectrum-file',
+        dest='spectrum',
+        help='Spectrum Studio CSV of analyte spectrum',
+    )
+    parser.add_argument(
+        '-i', '--integration-time',
+        type=pos_int,
+        default=10000,
+        help='Integration time when reading from spectrometer.',
+    )
+    parser.add_argument(
+        '-n', '--num-avgs',
+        type=pos_int,
+        default=3,
+        help='Number of averages when reading from spectrometer.',
+    )
+    #parser.add_argument('blank', nargs='?', help='Spectrum Studio CSV of blank spectrum')
+    parser.add_argument(
+        '--no-show',
+        dest='show_graph',
+        action='store_false',
+        help='Do not show the graph onscreen',
+    )
     args = parser.parse_args()
+    args.blank = None
 
 from matplotlib.lines import Line2D
 from scipy import signal, sparse
@@ -21,23 +55,26 @@ import numpy as np
 import pandas as pd
 import pywt
 import sys
+from spectrometer_decode import read_spectrometer, find_port
+
+SPEC_CALLIBRATION = [0, -0.00000383008, -0.179129, 717.783]
 
 class RamanDenoiser:
-    def __init__(self, wavenumbers=None, intensities=None):
-        if wavenumbers is not None and intensities is not None:
-            self.initial_wavenumbers = np.array(wavenumbers)
+    def __init__(self, wavelengths=None, intensities=None):
+        if wavelengths is not None and intensities is not None:
+            self.wavelengths = np.array(wavelengths)
+            self.wavenumbers = (1 / 532 - 1 / wavelengths) * 10**7
             self.initial_intensities = np.array(intensities)
         else:
-            self.initial_wavenumbers = None
+            self.wavelengths = None
             self.initial_intensities = None
         self.intensities = self.initial_intensities
-        self.wavenumbers = self.initial_wavenumbers
 
     def clone(self):
         '''Returns a deep copy of the denoiser in its current state.'''
         new = type(self)()
-        new.initial_wavenumbers = self.initial_wavenumbers.copy()
         new.initial_intensities = self.initial_intensities.copy()
+        new.wavelengths = self.wavelengths.copy()
         new.wavenumbers = self.wavenumbers.copy()
         new.intensities = self.intensities.copy()
         return new
@@ -50,22 +87,34 @@ class RamanDenoiser:
             df = df[df.iloc[:,wavenumber_col] > 540]
 
             if isinstance(wavenumber_col, int):
-                wavenumbers = df.iloc[:, wavenumber_col].values
+                wavelengths = df.iloc[:, wavenumber_col].values
             else:
-                wavenumbers = df[wavenumber_col].values
-            incident_wn = 10**7 / 532
-            wavenumbers = incident_wn - 10**7 / wavenumbers
+                wavelengths = df[wavenumber_col].values
 
             if isinstance(intensity_col, int):
                 intensities = df.iloc[:, intensity_col].values
             else:
                 intensities = df[intensity_col].values
 
-            print(f"Successfully loaded {len(wavenumbers)} data points from {filepath}")
-            return cls(wavenumbers, intensities)
+            print(f"Successfully loaded {len(wavelengths)} data points from {filepath}")
+            return cls(wavelengths, intensities)
 
         except Exception as e:
             raise Exception(f"Error loading CSV '{filepath}'") from e
+
+    @classmethod
+    def from_spectrometer(cls, integration_time, num_avgs):
+        port = find_port()
+        intensities = []
+        for _ in range(num_avgs):
+            spectrum = read_spectrometer(integration_time, port)
+            intensities.append(spectrum)
+            print(f'took spectrum: [{spectrum.min()}, {spectrum.max()}]')
+        print(intensities)
+        intensities = np.sum(intensities, axis=0) / num_avgs
+        wavelengths = np.polyval(SPEC_CALLIBRATION, np.arange(len(intensities)))
+        print(wavelengths, intensities)
+        return RamanDenoiser(wavelengths, intensities)
 
     def savitzky_golay(self, window_length=11, polyorder=3):
         if window_length % 2 == 0:
@@ -220,8 +269,8 @@ class RamanDenoiser:
         else:
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
 
-        ax1.plot(self.initial_wavenumbers, self.initial_intensities, '-', linewidth=1, alpha=0.7)
-        ax1.set_xlabel('Raman Shift (cm⁻¹)')
+        ax1.plot(self.wavelengths, self.initial_intensities, '-', linewidth=1, alpha=0.7)
+        ax1.set_xlabel('Wavelength (nm)')
         ax1.set_ylabel('Intensity (a.u.)')
         ax1.set_title('Original Spectrum')
         ax1.grid(True, alpha=0.3)
@@ -282,16 +331,20 @@ def raman_analysis(denoiser):
     #print(f"Found {len(peaks)} peaks")
 
 if __name__ == "__main__":
-    spectrum_fn_split = args.spectrum.split('.')
-    spectrum_basename = '.'.join(
-        spectrum_fn_split[slice(None, -1 if len(spectrum_fn_split) > 1 else None)]
-    )
-    spectrum = RamanDenoiser.from_csv(
-        args.spectrum,
-        wavenumber_col=1,
-        intensity_col=3,
-        skiprows=5
-    )
+    if args.spectrum:
+        spectrum_fn_split = args.spectrum.split('.')
+        spectrum_basename = '.'.join(
+            spectrum_fn_split[slice(None, -1 if len(spectrum_fn_split) > 1 else None)]
+        )
+        spectrum = RamanDenoiser.from_csv(
+            args.spectrum,
+            wavenumber_col=1,
+            intensity_col=3,
+            skiprows=5
+        )
+    else:
+        spectrum_basename = 'spectrum'
+        spectrum = RamanDenoiser.from_spectrometer(args.integration_time, args.num_avgs)
     raman_analysis(spectrum)
     fig, axs = spectrum.plot_comparison(label=("No blank sub" if args.blank else None))
 

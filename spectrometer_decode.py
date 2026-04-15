@@ -94,21 +94,7 @@ def read_spectrometer(integration_time, port):
         _writeline(ser, "Q")  # reset settings
         return _decode_spectrometer_data(data)  # get numbers
 
-def plot_spectrum(integration_time):
+def find_port():
     ports = list(list_ports.comports())
-    for p in ports:
-        print(p.device)
     print(f'Using {ports[0]}')
-    data = read_spectrometer(integration_time, ports[0].device)
-    pixels = range(len(data))  # x-axis: pixel index (0–2047)
-    
-    plt.figure(figsize=(10, 4))
-    plt.plot(pixels, data)
-    plt.xlabel("Pixel")
-    plt.ylabel("Intensity (counts)")
-    plt.title(f"Spectrometer Readout (integration time: {integration_time})")
-    plt.tight_layout()
-    plt.show()
-
-if __name__ == '__main__':
-    plot_spectrum(1000)  # 1000ms integration time, adjust as needed
+    return ports[0].device
