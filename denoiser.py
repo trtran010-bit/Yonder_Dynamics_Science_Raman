@@ -28,8 +28,8 @@ class RamanDenoiser:
             self.initial_wavenumbers = np.array(wavenumbers)
             self.initial_intensities = np.array(intensities)
         else:
-            self.wavenumbers = None
-            self.intensities = None
+            self.initial_wavenumbers = None
+            self.initial_intensities = None
         self.intensities = self.initial_intensities
         self.wavenumbers = self.initial_wavenumbers
 
@@ -161,7 +161,7 @@ class RamanDenoiser:
         self.wavenumbers = self.wavenumbers[mask]
 
     def subtract_blank(self, blank, factor=2):
-        if np.any(self.processed_wavenumbers != blank.processed_wavenumbers):
+        if np.any(self.wavenumbers != blank.wavenumbers):
             raise ValueError('Wavenumber lists of operands do not match')
         self.intensities = np.maximum(self.intensities - blank.intensities * factor, 0)
 
@@ -214,7 +214,6 @@ class RamanDenoiser:
 
         return peak_data_sorted
 
-<<<<<<< HEAD
     def plot_comparison(self, title="Raman Spectrum Processing", show_peak_labels=True, fig_axs=None, defer=False, label=None):
         if fig_axs:
             fig, (ax1, ax2) = fig_axs
@@ -309,8 +308,9 @@ if __name__ == "__main__":
         blank_subtracted.plot_comparison(fig_axs=(fig, axs), label="Blank subtracted")
 
     fig.tight_layout()
-    fig.savefig(spectrum_basename + '-graph.png')
-    print(f"saved figure to {graphpath}")
+    graph_path = spectrum_basename + '-graph.png'
+    fig.savefig(graph_path)
+    print(f"saved figure to {graph_path}")
     spectrum.save_to_file(spectrum_basename + '-spectrum.csv')
     if args.show_graph:
         plt.show()
