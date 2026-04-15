@@ -1,4 +1,4 @@
-rom time import sleep
+from time import sleep
 from serial import Serial
 import numpy as np
 from serial.tools import list_ports
@@ -16,11 +16,6 @@ import matplotlib.pyplot as plt
 #     raise RuntimeError("No serial port found")
 
 # PORT = find_port()
-
-from serial.tools import list_ports
-port = list(list_ports.comports())
-for p in port:
-    print(p.device)
 
 # write bytes with delay
 def _writeline(ser, data, delay=0.05):
@@ -85,7 +80,7 @@ def _decode_spectrometer_data(data):
             break  # the sensor is only 2048 pixels
     return np.array(output)
 
-def read_spectrometer(integration_time):
+def read_spectrometer(integration_time, port):
     with Serial(port, 9600, timeout=1) as ser:
         _writeline(ser, "Q")  # reset settings
         _writeline(ser, "K0")  # raise baudrate
@@ -100,7 +95,11 @@ def read_spectrometer(integration_time):
         return _decode_spectrometer_data(data)  # get numbers
 
 def plot_spectrum(integration_time):
-    data = read_spectrometer(integration_time)
+    ports = list(list_ports.comports())
+    for p in ports:
+        print(p.device)
+    print(f'Using {ports[0]}')
+    data = read_spectrometer(integration_time, ports[0].device)
     pixels = range(len(data))  # x-axis: pixel index (0–2047)
     
     plt.figure(figsize=(10, 4))
@@ -111,4 +110,5 @@ def plot_spectrum(integration_time):
     plt.tight_layout()
     plt.show()
 
-plot_spectrum(1000)  # 1000ms integration time, adjust as needed
+if __name__ == '__main__':
+    plot_spectrum(1000)  # 1000ms integration time, adjust as needed
