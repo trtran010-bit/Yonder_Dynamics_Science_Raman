@@ -90,23 +90,28 @@ class RamanDenoiser:
 
     def fir_filter(self, cutoff_freq=0.1, numtaps=51, window='hamming'):
         fir_coeff = firwin(numtaps, cutoff_freq, window=window)
-
         self.processed = lfilter(fir_coeff, 1.0, self.processed)
 
-    def hilbert_vibration_decomposition(self):
+    def hvd_feature_extraction(self, peak_threshold_fac=1, cutoff_freq=20):
         c1, c2 = pysdkit.HVD(K=2, fpar=cutoff_freq).fit_transform(self.processed)
-        self.processed_wavenumbers = self.processed_wavenumbers[:-2]
-        c1_stdev = np.std(c1)
-        signal_dir = np.sign(np.diff(self.processed)) # maybe use c1 or c2?
-        extr_mask = signal_diff[:-1] != signal_diff[1:] & signal_diff[1:] != 0
-        extr_mask = np.insert(extr_mask, 0, False)
-        extr_int = self.processed[extr_mask]
-        extr_wn = self.processed_wavenumbers[extr_mask]
-        extr_type = signal_dir[extr_mask] # -1 for maxima, 1 for minima
-        max_idx = np.argwhere(extr_type == -1)
-        max_idx = max_idx[~np.isin(max_idx, [0, len(max_idx) - 1])]
-        side_avg_height = (extr_int[max_idx] - extr_int[[max_idx - 1, max_idx + 1]]).sum() / 2
-
+        self.processed = c1 + c2
+        #noise_stdev = np.std(c1)
+        #signal_dir = np.sign(np.diff(self.processed)) # maybe use c1 or c2?
+        #extr_mask = signal_diff[:-1] != signal_diff[1:] & signal_diff[1:] != 0
+        #extr_mask = np.insert(extr_mask, 0, False)
+        #extr_int = self.processed[extr_mask]
+        #extr_wn = self.processed_wavenumbers[extr_mask]
+        #extr_type = signal_dir[extr_mask] # -1 for maxima, 1 for minima
+        #max_idx = np.argwhere(extr_type == -1)
+        #max_idx = max_idx[~np.isin(max_idx, [0, len(max_idx) - 1])]
+        #print(max_idx.shape)
+        #side_avg_height = np.mean(extr_int[max_idx] - extr_int[[max_idx - 1, max_idx + 1]], axis=1)
+        #global_avg_height = np.mean(side_avg_height)
+        #peak_wn = extr_wn[
+        #    extr_int > noise_stdev
+        #    & side_avg_height > peak_threshold_fac * global_avg_height
+        #]
+        #self.polynomial_baseline(degree=4)
 
     def wavelet_denoise(self, wavelet='sym4', level=None, threshold_mode='soft'):
         if level is None:
@@ -275,6 +280,7 @@ class RamanDenoiser:
         print(f"saved processed data to {filepath}")
 
 def raman_analysis(denoiser):
+    spectrum.hvd_feature_extraction()
     denoiser.als_baseline(lam=1e5, p=0.01)
     denoiser.fir_filter(cutoff_freq=0.1, numtaps=51)
     #denoiser.wavelet_denoise(wavelet='db4', threshold_mode='soft', level=3)
