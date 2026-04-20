@@ -4,19 +4,6 @@ import numpy as np
 from serial.tools import list_ports
 import matplotlib.pyplot as plt
 
-# def find_port():
-#     ports = list_ports.comports()
-#     for p in ports:
-#         name = p.device
-#         # Mac: /dev/tty.usbserial-* or /dev/tty.usbmodem-*
-#         # Linux: /dev/ttyUSB* or /dev/ttyACM*
-#         if any(pat in name for pat in ("usbserial", "usbmodem", "ttyUSB", "ttyACM")):
-#             print(f"Using port: {name}")
-#             return name
-#     raise RuntimeError("No serial port found")
-
-# PORT = find_port()
-
 # write bytes with delay
 def _writeline(ser, data, delay=0.05):
     ser.write(data.encode("utf-8") + b"\r\n")

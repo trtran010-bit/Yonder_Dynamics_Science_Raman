@@ -110,10 +110,8 @@ class RamanDenoiser:
             spectrum = read_spectrometer(integration_time, port)
             intensities.append(spectrum)
             print(f'took spectrum: [{spectrum.min()}, {spectrum.max()}]')
-        print(intensities)
         intensities = np.sum(intensities, axis=0) / num_avgs
         wavelengths = np.polyval(SPEC_CALLIBRATION, np.arange(len(intensities)))
-        print(wavelengths, intensities)
         return RamanDenoiser(wavelengths, intensities)
 
     def savitzky_golay(self, window_length=11, polyorder=3):
@@ -364,6 +362,6 @@ if __name__ == "__main__":
     graph_path = spectrum_basename + '-graph.png'
     fig.savefig(graph_path)
     print(f"saved figure to {graph_path}")
-    spectrum.save_to_file(spectrum_basename + '-spectrum.csv')
+    spectrum.save_to_file(spectrum_basename + '-denoised.csv')
     if args.show_graph:
         plt.show()
