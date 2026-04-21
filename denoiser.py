@@ -1,5 +1,7 @@
 import argparse
 
+SPEC_CALLIBRATION = [0, -0.00000383008, -0.179129, 717.783]
+
 def pos_int(v):
     v = int(v)
     if v <= 0:
@@ -16,26 +18,45 @@ if __name__ == '__main__':
     input_group.add_argument(
         '-s', '--from-spec',
         action='store_true',
-        help='Read data from the spectrometer',
+        help=(
+            'If given, data is read from the spectrometer. --integration-time and --num-avgs '
+            'configure the settings used to read the spectrum. Must not be given with '
+            '--spectrum-file.'
+        ),
     )
     input_group.add_argument(
         '-f', '--spectrum-file',
         dest='spectrum',
-        help='Spectrum Studio CSV of analyte spectrum',
+        help=(
+            'If given, data is read from SPECTRUM_FILE, which is interpreted as a Spectrum '
+            'Studio CSV of analyte spectrum. Must not be given with --from-spec. '
+            'Callibration coefficients: '
+        ) + ', '.join(f'C{i} = {c}' for i, c in zip(range(3, -1, -1), SPEC_CALLIBRATION)),
     )
     parser.add_argument(
         '-i', '--integration-time',
         type=pos_int,
         default=10000,
-        help='Integration time when reading from spectrometer.',
+        help=(
+            'Integration time when reading from spectrometer. Must not be given '
+            'with --spectrum-file.'
+        ),
     )
     parser.add_argument(
         '-n', '--num-avgs',
         type=pos_int,
         default=3,
-        help='Number of averages when reading from spectrometer.',
+        help=(
+            'Number of averages when reading from spectrometer. Must not be given '
+            'with --spectrum-file.'
+        ),
     )
-    #parser.add_argument('blank', nargs='?', help='Spectrum Studio CSV of blank spectrum')
+    parser.add_argument(
+        '--blank',
+        help=(
+            'Path to Spectrum Studio CSV of blank spectrum, used in blank subtraction if given.'
+        ),
+    )
     parser.add_argument(
         '--no-show',
         dest='show_graph',
@@ -44,9 +65,13 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--blank',
-        help='Path to blank CSV',
+        help='If given, path to Spectrum Studio CSV of blank/negative control *with laser on.*',
     )
     args = parser.parse_args()
+    if (args.num_avgs or args.integration_time) and args.spectrum:
+        parser.error(
+            'Cannot specify spectrometer settings when reading data from file.'
+        )
 
 from matplotlib.lines import Line2D
 from scipy import signal, sparse
@@ -59,8 +84,6 @@ import pandas as pd
 import pywt
 import sys
 from spectrometer_decode import read_spectrometer, find_port
-
-SPEC_CALLIBRATION = [0, -0.00000383008, -0.179129, 717.783]
 
 class RamanDenoiser:
     def __init__(self, wavelengths=None, intensities=None):
