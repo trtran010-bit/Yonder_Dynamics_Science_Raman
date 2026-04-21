@@ -63,10 +63,6 @@ if __name__ == '__main__':
         action='store_false',
         help='Do not show the graph onscreen',
     )
-    parser.add_argument(
-        '--blank',
-        help='If given, path to Spectrum Studio CSV of blank/negative control *with laser on.*',
-    )
     args = parser.parse_args()
     if (args.num_avgs or args.integration_time) and args.spectrum:
         parser.error(
