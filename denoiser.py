@@ -42,8 +42,11 @@ if __name__ == '__main__':
         action='store_false',
         help='Do not show the graph onscreen',
     )
+    parser.add_argument(
+        '--blank',
+        help='Path to blank CSV',
+    )
     args = parser.parse_args()
-    args.blank = None
 
 from matplotlib.lines import Line2D
 from scipy import signal, sparse
@@ -263,50 +266,48 @@ class RamanDenoiser:
 
     def plot_comparison(self, title="Raman Spectrum Processing", show_peak_labels=True, fig_axs=None, defer=False, label=None):
         if fig_axs:
-            fig, (ax1, ax2) = fig_axs
+            fig, (ax1, ax2), lines = fig_axs
+            ax1.plot(self.wavelengths, self.initial_intensities, '-', linewidth=1, alpha=0.7)
+            ax1.set_xlabel('Wavelength (nm)')
+            ax1.set_ylabel('Intensity (a.u.)')
+            ax1.set_title('Original Spectrum')
+            ax1.grid(True, alpha=0.3)
         else:
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+            lines = []
 
-        ax1.plot(self.wavelengths, self.initial_intensities, '-', linewidth=1, alpha=0.7)
-        ax1.set_xlabel('Wavelength (nm)')
-        ax1.set_ylabel('Intensity (a.u.)')
-        ax1.set_title('Original Spectrum')
-        ax1.grid(True, alpha=0.3)
+        lines.append(ax2.plot(self.wavenumbers, self.intensities, '-', linewidth=1.5, label=label)[0])
+        peaks, properties = self.find_peaks(auto_adapt=True)
+        classifications = self.classify_peaks(peaks, properties)
 
-        ax2.plot(self.wavenumbers, self.intensities, '-', linewidth=1.5, label=label)
-        try:
-            peaks, properties = self.find_peaks(auto_adapt=True)
-            classifications = self.classify_peaks(peaks, properties)
+        colors = {'strong': 'darkgreen', 'medium': 'orange', 'weak': 'lightblue'}
+        for peak, classification in zip(peaks, classifications):
+            ax2.plot(self.wavenumbers[peak], self.intensities[peak], 'o',
+                    color=colors[classification], markersize=8)
 
-            colors = {'strong': 'darkgreen', 'medium': 'orange', 'weak': 'lightblue'}
-            for peak, classification in zip(peaks, classifications):
-                ax2.plot(self.wavenumbers[peak], self.intensities[peak], 'o',
-                        color=colors[classification], markersize=8)
+            if show_peak_labels and classification in ['strong', 'medium']:
+                ax2.text(self.wavenumbers[peak], self.intensities[peak],
+                       f'{self.wavenumbers[peak]:.0f}',
+                       fontsize=8, ha='center', va='bottom')
 
-                if show_peak_labels and classification in ['strong', 'medium']:
-                    ax2.text(self.wavenumbers[peak], self.intensities[peak],
-                           f'{self.wavenumbers[peak]:.0f}',
-                           fontsize=8, ha='center', va='bottom')
-
-            # legend
-            legend_elements = [
-                Line2D([0], [0], marker='o', color='w', markerfacecolor='darkgreen',
-                      markersize=8, label='Strong peaks'),
-                Line2D([0], [0], marker='o', color='w', markerfacecolor='orange',
-                      markersize=8, label='Medium peaks'),
-                Line2D([0], [0], marker='o', color='w', markerfacecolor='lightblue',
-                      markersize=8, label='Weak peaks')
-            ]
-            ax2.legend(handles=legend_elements)
-        except Exception as e:
-            print(f"couldn't detect peaks: {e}")
+        # legend
+        legend_elements = [
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='darkgreen',
+                  markersize=8, label='Strong peaks'),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='orange',
+                  markersize=8, label='Medium peaks'),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='lightblue',
+                  markersize=8, label='Weak peaks'),
+            *[line for line in lines if not line.get_label().startswith('_')],
+        ]
+        ax2.legend(handles=legend_elements)
 
         ax2.set_xlabel('Raman Shift (cm⁻¹)')
-        ax2.set_ylabel('Intensity (a.u.)')
+        ax2.set_ylabel('Normalized intensity')
         ax2.set_title('Processed Spectrum')
         ax2.grid(True, alpha=0.3)
         plt.tight_layout()
-        return fig, (ax1, ax2)
+        return fig, (ax1, ax2), lines
 
     def classify_peaks(self, peaks, properties):
         return ['strong' for _ in peaks]
@@ -323,7 +324,7 @@ def raman_analysis(denoiser):
     denoiser.als_baseline(lam=1e5, p=0.01)
     denoiser.fir_filter(cutoff_freq=0.1, numtaps=51)
     #denoiser.wavelet_denoise(wavelet='db4', threshold_mode='soft', level=3)
-    denoiser.trim(low=700)
+    denoiser.trim(low=0)
     denoiser.normalize(method='max')
     #peaks, properties = denoiser.find_peaks(prominence=0.1, distance=20)
     #print(f"Found {len(peaks)} peaks")
@@ -344,7 +345,7 @@ if __name__ == "__main__":
         spectrum_basename = 'spectrum'
         spectrum = RamanDenoiser.from_spectrometer(args.integration_time, args.num_avgs)
     raman_analysis(spectrum)
-    fig, axs = spectrum.plot_comparison(label=("No blank sub" if args.blank else None))
+    fig, axs, lines = spectrum.plot_comparison(label=("No blank sub" if args.blank else None))
 
     if args.blank is not None:
         blank = RamanDenoiser.from_csv(
@@ -356,7 +357,7 @@ if __name__ == "__main__":
         raman_analysis(blank)
         blank_subtracted = spectrum.clone()
         blank_subtracted.subtract_blank(blank)
-        blank_subtracted.plot_comparison(fig_axs=(fig, axs), label="Blank subtracted")
+        blank_subtracted.plot_comparison(fig_axs=(fig, axs, lines), label="Blank subtracted")
 
     fig.tight_layout()
     graph_path = spectrum_basename + '-graph.png'
