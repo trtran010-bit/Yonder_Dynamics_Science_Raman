@@ -36,7 +36,6 @@ if __name__ == '__main__':
     parser.add_argument(
         '-i', '--integration-time',
         type=pos_int,
-        default=10000,
         help=(
             'Integration time when reading from spectrometer. Must not be given '
             'with --spectrum-file.'
@@ -45,7 +44,6 @@ if __name__ == '__main__':
     parser.add_argument(
         '-n', '--num-avgs',
         type=pos_int,
-        default=3,
         help=(
             'Number of averages when reading from spectrometer. Must not be given '
             'with --spectrum-file.'
@@ -68,6 +66,10 @@ if __name__ == '__main__':
         parser.error(
             'Cannot specify spectrometer settings when reading data from file.'
         )
+    if args.integration_time is None:
+        args.integration_time = 10000
+    if args.num_avgs is None:
+        args.num_avgs = 3
 
 from matplotlib.lines import Line2D
 from scipy import signal, sparse
