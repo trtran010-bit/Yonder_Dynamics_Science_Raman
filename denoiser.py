@@ -283,7 +283,7 @@ class RamanDenoiser:
         extr_mask = (signal_dir[:-1] != signal_dir[1:]) & (signal_dir[1:] != 0)
         extr_mask = np.append(extr_mask, False)
         extr_int = self.intensities[extr_mask]
-        extr_type = signal_dir[extr_mask] # -1 for maxima, 1 for minima
+        extr_type = signal_dir[extr_mask] # 1 for maxima, -1 for minima
         max_idx = np.argwhere(extr_type == 1)
         max_idx = max_idx[~np.isin(max_idx, [0, len(extr_int) - 1])]
         side_avg_heights = np.mean(extr_int[max_idx] - extr_int[[max_idx - 1, max_idx + 1]], axis=0)
