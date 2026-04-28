@@ -1,9 +1,16 @@
 import argparse
 
 SPEC_CALLIBRATION = [0, -0.00000383008, -0.179129, 717.783]
+DEFAULT_BLANK_SUB_FAC = 2.0
 
 def pos_int(v):
     v = int(v)
+    if v <= 0:
+        raise ValueError
+    return v
+
+def pos_float(v):
+    v = float(v)
     if v <= 0:
         raise ValueError
     return v
@@ -51,8 +58,19 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--blank',
+        dest='blanks',
         help=(
-            'Path to Spectrum Studio CSV of blank spectrum, used in blank subtraction if given.'
+            'Path to Spectrum Studio CSV of blank spectrum, used in blank subtraction if given. '
+            'If specified multiple times, the normalized average is used as the blank.'
+        ),
+        action='append',
+    )
+    parser.add_argument(
+        '--blank-factor',
+        type=pos_float,
+        help=(
+            'Scaling factor for blank subtraction. Larger number -> harsher subtraction. Defaults '
+            f'to {DEFAULT_BLANK_SUB_FAC}.'
         ),
     )
     parser.add_argument(
@@ -69,11 +87,22 @@ if __name__ == '__main__':
         default=[],
         help='Hides a peak classification',
     )
+    parser.add_argument(
+        '-o', '--output',
+        help='Output directory. Defaults to saving in same folder as input files.'
+    )
     args = parser.parse_args()
     if (args.num_avgs or args.integration_time) and args.spectrum:
         parser.error(
             'Cannot specify spectrometer settings when reading data from file.'
         )
+    if args.blank_factor is not None and not args.blanks:
+        parser.error(
+            'Cannot specify blank factor when not using blank subtraction. '
+            'Specify at least one --blank.'
+        )
+    if args.blank_factor is None:
+        args.blank_factor = DEFAULT_BLANK_SUB_FAC
     if args.integration_time is None:
         args.integration_time = 10000
     if args.num_avgs is None:
@@ -84,6 +113,7 @@ from scipy import signal, sparse
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import hilbert, firwin, lfilter
 from scipy.sparse.linalg import spsolve
+import pathlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -239,20 +269,23 @@ class RamanDenoiser:
         self.intensities = self.intensities[mask]
         self.wavenumbers = self.wavenumbers[mask]
 
-    def subtract_blank(self, blank, factor=2):
-        if np.any(self.wavenumbers != blank.wavenumbers):
+    def subtract_blanks(self, blanks, factor):
+        if any(np.any(blank.wavenumbers != self.wavenumbers) for blank in blanks):
             raise ValueError('Wavenumber lists of operands do not match')
-        self.intensities = np.maximum(self.intensities - blank.intensities * factor, 0)
+        if any(blank.intensities.max() != 1 for blank in blanks):
+            raise ValueError('Blanks must be max-normalized')
+        blank = np.mean([blank.intensities for blank in blanks], axis=0)
+        self.intensities = np.maximum(self.intensities - blank * factor, 0)
 
     def find_peaks(self, prominence=None, distance=10, height=None, width=None, auto_adapt=True):
-        signal_dir = np.sign(np.diff(self.intensities)) # maybe use c1 or c2?
-        signal_dir = np.insert(signal_dir, 0, 1)
+        signal_dir = np.sign(np.diff(self.intensities))
+        signal_dir = np.insert(signal_dir, 0, signal_dir[1])
         extr_mask = (signal_dir[:-1] != signal_dir[1:]) & (signal_dir[1:] != 0)
-        extr_mask = np.insert(extr_mask, 0, False)
+        extr_mask = np.append(extr_mask, False)
         extr_int = self.intensities[extr_mask]
         extr_type = signal_dir[extr_mask] # -1 for maxima, 1 for minima
-        max_idx = np.argwhere(extr_type == -1)
-        max_idx = max_idx[~np.isin(max_idx, [0, len(extr_mask) - 1])]
+        max_idx = np.argwhere(extr_type == 1)
+        max_idx = max_idx[~np.isin(max_idx, [0, len(extr_int) - 1])]
         side_avg_heights = np.mean(extr_int[max_idx] - extr_int[[max_idx - 1, max_idx + 1]], axis=0)
         return np.argwhere(extr_mask).flat[max_idx], {
             'side_avg_heights': side_avg_heights,
@@ -374,19 +407,26 @@ if __name__ == "__main__":
     else:
         spectrum_basename = 'spectrum'
         spectrum = RamanDenoiser.from_spectrometer(args.integration_time, args.num_avgs)
+    if args.output:
+        pathlib.Path(args.output).mkdir(parents=True, exist_ok=True)
+        spectrum_basename = str(pathlib.Path(args.output) / pathlib.Path(spectrum_basename).name)
     raman_analysis(spectrum)
-    fig, axs, lines = spectrum.plot_comparison(label=("No blank sub" if args.blank else None))
+    fig, axs, lines = spectrum.plot_comparison(label=("No blank sub" if args.blanks else None))
 
-    if args.blank is not None:
-        blank = RamanDenoiser.from_csv(
-            args.blank,
-            wavenumber_col=1,
-            intensity_col=3,
-            skiprows=5
-        )
-        raman_analysis(blank)
+    if args.blanks is not None:
+        blanks = [
+            RamanDenoiser.from_csv(
+                blank,
+                wavenumber_col=1,
+                intensity_col=3,
+                skiprows=5
+            )
+            for blank in args.blanks
+        ]
+        for blank in blanks:
+            raman_analysis(blank)
         blank_subtracted = spectrum.clone()
-        blank_subtracted.subtract_blank(blank, factor=1.0)
+        blank_subtracted.subtract_blanks(blanks, args.blank_factor)
         blank_subtracted.plot_comparison(fig_axs=(fig, axs, lines), label="Blank subtracted")
 
     fig.tight_layout()
