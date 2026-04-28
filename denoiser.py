@@ -61,6 +61,14 @@ if __name__ == '__main__':
         action='store_false',
         help='Do not show the graph onscreen',
     )
+    parser.add_argument(
+        '--hide',
+        dest='hide_peak_classes',
+        action='append',
+        choices=['weak', 'medium', 'strong'],
+        default=[],
+        help='Hides a peak classification',
+    )
     args = parser.parse_args()
     if (args.num_avgs or args.integration_time) and args.spectrum:
         parser.error(
@@ -237,25 +245,19 @@ class RamanDenoiser:
         self.intensities = np.maximum(self.intensities - blank.intensities * factor, 0)
 
     def find_peaks(self, prominence=None, distance=10, height=None, width=None, auto_adapt=True):
-        # find peaks in the spectrum
-        # if auto_adapt is True, it'll try to figure out good parameters for that material
-        if auto_adapt and prominence is None:
-            # calculate adaptive prominence based on noise level
-            # using the standard deviation of the baseline region as noise estimate
-            noise_std = np.std(self.intensities[:int(len(self.intensities)*0.1)])
-            prominence = max(3 * noise_std, 0.05 * np.max(self.intensities))
-            print(f"auto-detected prominence: {prominence:.4f}")
-
-        if auto_adapt and height is None:
-            # set minimum height as mean + 2*std
-            height = np.mean(self.intensities) + 2 * np.std(self.intensities)
-            print(f"auto-detected height threshold: {height:.4f}")
-
-        peaks, properties = signal.find_peaks(
-            self.intensities, prominence=prominence, distance=distance, height=height, width=width
-        )
-
-        return peaks, properties
+        signal_dir = np.sign(np.diff(self.intensities)) # maybe use c1 or c2?
+        signal_dir = np.insert(signal_dir, 0, 1)
+        extr_mask = (signal_dir[:-1] != signal_dir[1:]) & (signal_dir[1:] != 0)
+        extr_mask = np.insert(extr_mask, 0, False)
+        extr_int = self.intensities[extr_mask]
+        extr_type = signal_dir[extr_mask] # -1 for maxima, 1 for minima
+        max_idx = np.argwhere(extr_type == -1)
+        max_idx = max_idx[~np.isin(max_idx, [0, len(extr_mask) - 1])]
+        side_avg_heights = np.mean(extr_int[max_idx] - extr_int[[max_idx - 1, max_idx + 1]], axis=0)
+        return np.argwhere(extr_mask).flat[max_idx], {
+            'side_avg_heights': side_avg_heights,
+            'global_avg_height': np.mean(side_avg_heights),
+        }
 
     # testing new method
     def find_all_peaks_unbiased(self, min_prominence_ratio=0.01, min_distance=5):
@@ -303,6 +305,8 @@ class RamanDenoiser:
 
         colors = {'strong': 'darkgreen', 'medium': 'orange', 'weak': 'lightblue'}
         for peak, classification in zip(peaks, classifications):
+            if classification in args.hide_peak_classes:
+                continue
             ax2.plot(self.wavenumbers[peak], self.intensities[peak], 'o',
                     color=colors[classification], markersize=8)
 
@@ -330,8 +334,13 @@ class RamanDenoiser:
         plt.tight_layout()
         return fig, (ax1, ax2), lines
 
-    def classify_peaks(self, peaks, properties):
-        return ['strong' for _ in peaks]
+    def classify_peaks(self, _peaks, properties):
+        return [
+            'strong' if sah > 0.7 * properties['global_avg_height'] else
+            'medium' if sah > 0.5 * properties['global_avg_height'] else
+            'weak'
+            for sah in properties['side_avg_heights']
+        ]
 
     def save_to_file(self, filepath):
         df = pd.DataFrame({
@@ -377,7 +386,7 @@ if __name__ == "__main__":
         )
         raman_analysis(blank)
         blank_subtracted = spectrum.clone()
-        blank_subtracted.subtract_blank(blank)
+        blank_subtracted.subtract_blank(blank, factor=1.0)
         blank_subtracted.plot_comparison(fig_axs=(fig, axs, lines), label="Blank subtracted")
 
     fig.tight_layout()
