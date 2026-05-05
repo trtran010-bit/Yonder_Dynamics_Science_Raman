@@ -2,7 +2,6 @@ from time import sleep
 from serial import Serial
 import numpy as np
 from serial.tools import list_ports
-import matplotlib.pyplot as plt
 
 # write bytes with delay
 def _writeline(ser, data, delay=0.05):
@@ -68,7 +67,7 @@ def _decode_spectrometer_data(data):
     return np.array(output)
 
 def read_spectrometer(integration_time, port):
-    with Serial(port, 9600, timeout=1) as ser:
+    with Serial(port, 9600, timeout=(integration_time // 1000) + 2) as ser:
         _writeline(ser, "Q")  # reset settings
         _writeline(ser, "K0")  # raise baudrate
         ser.baudrate = 115200
@@ -83,5 +82,5 @@ def read_spectrometer(integration_time, port):
 
 def find_port():
     ports = list(list_ports.comports())
-    print(f'Using {ports[0]}')
+    print(f'Using {ports[0]} ({ports[0].device})')
     return ports[0].device
