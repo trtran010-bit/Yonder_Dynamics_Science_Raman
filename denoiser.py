@@ -369,8 +369,8 @@ class RamanDenoiser:
 
     def classify_peaks(self, _peaks, properties):
         return [
-            'strong' if sah > 0.7 * properties['global_avg_height'] else
-            'medium' if sah > 0.5 * properties['global_avg_height'] else
+            'strong' if sah > 1.7 * properties['global_avg_height'] else
+            'medium' if sah > 1.5 * properties['global_avg_height'] else
             'weak'
             for sah in properties['side_avg_heights']
         ]
