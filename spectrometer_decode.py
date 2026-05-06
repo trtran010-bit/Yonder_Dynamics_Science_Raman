@@ -1,9 +1,7 @@
-rom time import sleep
+from time import sleep
 from serial import Serial
 import numpy as np
-
-# TODO checksum, support averaging, throw error when port isn't found, etc.
-PORT = "/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_A=CPb11A920-if00-port0"
+from serial.tools import list_ports
 
 # write bytes with delay
 def _writeline(ser, data, delay=0.05):
@@ -68,8 +66,8 @@ def _decode_spectrometer_data(data):
             break  # the sensor is only 2048 pixels
     return np.array(output)
 
-def read_spectrometer(integration_time):
-    with Serial(PORT, 9600, timeout=1) as ser:
+def read_spectrometer(integration_time, port):
+    with Serial(port, 9600, timeout=(integration_time // 1000) + 2) as ser:
         _writeline(ser, "Q")  # reset settings
         _writeline(ser, "K0")  # raise baudrate
         ser.baudrate = 115200
@@ -80,4 +78,9 @@ def read_spectrometer(integration_time):
         _writeline(ser, "S")  # request data
         data = ser.read(5000)  # read data, should never be more than 4096
         _writeline(ser, "Q")  # reset settings
-        return _decode_data(data)  # get numbers
+        return _decode_spectrometer_data(data)  # get numbers
+
+def find_port():
+    ports = list(list_ports.comports())
+    print(f'Using {ports[0]} ({ports[0].device})')
+    return ports[0].device
