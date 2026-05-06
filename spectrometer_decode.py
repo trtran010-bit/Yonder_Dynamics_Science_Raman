@@ -1,3 +1,4 @@
+import sys
 from time import sleep
 from serial import Serial
 import numpy as np
@@ -80,7 +81,8 @@ def read_spectrometer(integration_time, port):
         _writeline(ser, "Q")  # reset settings
         return _decode_spectrometer_data(data)  # get numbers
 
-def find_port():
+def find_port(silent=False):
     ports = list(list_ports.comports())
-    print(f'Using {ports[0]} ({ports[0].device})')
+    if not silent:
+        print(f'Using {ports[0]} ({ports[0].device})', file=sys.stderr)
     return ports[0].device

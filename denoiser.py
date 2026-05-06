@@ -174,7 +174,7 @@ class RamanDenoiser:
             print(f'took spectrum: [{spectrum.min()}, {spectrum.max()}]')
         intensities = np.sum(intensities, axis=0) / num_avgs
         wavelengths = np.polyval(SPEC_CALLIBRATION, np.arange(len(intensities)))
-        return RamanDenoiser(wavelengths, intensities)
+        return cls(wavelengths, intensities)
 
     def savitzky_golay(self, window_length=11, polyorder=3):
         if window_length % 2 == 0:
@@ -196,7 +196,6 @@ class RamanDenoiser:
 
     def fir_filter(self, cutoff_freq=0.1, numtaps=51, window='hamming'):
         fir_coeff = firwin(numtaps, cutoff_freq, window=window)
-
         self.intensities = lfilter(fir_coeff, 1.0, self.intensities)
 
     def hilbert_vibration_decomposition(self, num_components=3):
@@ -277,7 +276,7 @@ class RamanDenoiser:
         blank = np.mean([blank.intensities for blank in blanks], axis=0)
         self.intensities = np.maximum(self.intensities - blank * factor, 0)
 
-    def find_peaks(self, prominence=None, distance=10, height=None, width=None, auto_adapt=True):
+    def find_peaks(self):
         signal_dir = np.sign(np.diff(self.intensities))
         signal_dir = np.insert(signal_dir, 0, signal_dir[1])
         extr_mask = (signal_dir[:-1] != signal_dir[1:]) & (signal_dir[1:] != 0)
@@ -323,17 +322,17 @@ class RamanDenoiser:
     def plot_comparison(self, title="Raman Spectrum Processing", show_peak_labels=True, fig_axs=None, defer=False, label=None):
         if fig_axs:
             fig, (ax1, ax2), lines = fig_axs
+        else:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+            lines = []
             ax1.plot(self.wavelengths, self.initial_intensities, '-', linewidth=1, alpha=0.7)
             ax1.set_xlabel('Wavelength (nm)')
             ax1.set_ylabel('Intensity (a.u.)')
             ax1.set_title('Original Spectrum')
             ax1.grid(True, alpha=0.3)
-        else:
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-            lines = []
 
         lines.append(ax2.plot(self.wavenumbers, self.intensities, '-', linewidth=1.5, label=label)[0])
-        peaks, properties = self.find_peaks(auto_adapt=True)
+        peaks, properties = self.find_peaks()
         classifications = self.classify_peaks(peaks, properties)
 
         colors = {'strong': 'darkgreen', 'medium': 'orange', 'weak': 'lightblue'}
