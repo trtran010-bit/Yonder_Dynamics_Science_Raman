@@ -120,6 +120,8 @@ import pandas as pd
 import pywt
 import sys
 from spectrometer_decode import read_spectrometer, find_port
+from pptx import Presentation
+from pptx.util import Inches, Pt
 
 class RamanDenoiser:
     def __init__(self, wavelengths=None, intensities=None):
@@ -391,6 +393,50 @@ def raman_analysis(denoiser):
     #peaks, properties = denoiser.find_peaks(prominence=0.1, distance=20)
     #print(f"Found {len(peaks)} peaks")
 
+def generate_full_report(spectrum_obj, output_basename, standard_graph, blank_sub_obj=None, blank_graph=None):
+    """
+    The master reporting function. 
+    Creates the presentation, adds the data, and saves the file.
+    """
+    prs = Presentation()
+
+    #title slide
+    slide = prs.slides.add_slide(prs.slide_layouts[0])
+    slide.shapes.title.text = "Raman Spectroscopy Analysis Report"
+    slide.placeholders[1].text = f"Sample: {output_basename}"
+
+    #internal helper to add content slides
+    def add_content(denoiser, title_prefix, graph_path):
+        # Graph Slide
+        s1 = prs.slides.add_slide(prs.slide_layouts[5])
+        s1.shapes.title.text = f"{title_prefix}: Spectrum Graph"
+        s1.shapes.add_picture(graph_path, Inches(0.5), Inches(1.5), width=Inches(9))
+        
+        #table
+        s2 = prs.slides.add_slide(prs.slide_layouts[5])
+        s2.shapes.title.text = f"{title_prefix}: Peak Data"
+        peaks = denoiser.find_all_peaks_unbiased()[:10]
+        table = s2.shapes.add_table(len(peaks)+1, 3, Inches(1), Inches(1.5), Inches(8), Inches(4)).table
+        table.cell(0, 0).text = "Shift (cm⁻¹)"
+        table.cell(0, 1).text = "Intensity"
+        table.cell(0, 2).text = "Relative %"
+        for i, p in enumerate(peaks):
+            table.cell(i+1, 0).text = f"{p['wavenumber']:.1f}"
+            table.cell(i+1, 1).text = f"{p['intensity']:.2f}"
+            table.cell(i+1, 2).text = f"{p['relative_intensity']:.1%}"
+
+    #add the Standard Data
+    add_content(spectrum_obj, "Standard Analysis", standard_graph)
+
+    #add the Blank Subtracted Data (if applicable))
+    if blank_sub_obj and blank_graph:
+        add_content(blank_sub_obj, "Blank Subtracted", blank_graph)
+
+    #save the file
+    pptx_name = f"{output_basename}_Report.pptx"
+    prs.save(pptx_name)
+    print(f"Successfully generated combined report: {pptx_name}")
+
 if __name__ == "__main__":
     if args.spectrum:
         spectrum_fn_split = args.spectrum.split('.')
@@ -412,6 +458,16 @@ if __name__ == "__main__":
     raman_analysis(spectrum)
     fig, axs, lines = spectrum.plot_comparison(label=("No blank sub" if args.blanks else None))
 
+    #saving standard graph
+    path1 = spectrum_basename + '-standard.png'
+    fig.tight_layout()
+    fig.savefig(path1, dpi=300, bbox_inches='tight')
+    print(f"Saved standard figure to {path1}")
+
+    #blank subtraction and graphing
+    blank_subtracted = None 
+    path2 = None
+
     if args.blanks is not None:
         blanks = [
             RamanDenoiser.from_csv(
@@ -428,10 +484,18 @@ if __name__ == "__main__":
         blank_subtracted.subtract_blanks(blanks, args.blank_factor)
         blank_subtracted.plot_comparison(fig_axs=(fig, axs, lines), label="Blank subtracted")
 
-    fig.tight_layout()
-    graph_path = spectrum_basename + '-graph.png'
-    fig.savefig(graph_path)
-    print(f"saved figure to {graph_path}")
+        #updated graph with both lines saved
+        path2 = spectrum_basename + '-blank-subtracted.png'
+        fig.tight_layout()
+        fig.savefig(path2, dpi=300, bbox_inches='tight')
+        print(f"Saved blank-subtracted figure to {path2}")
+    
+    #generating report
     spectrum.save_to_file(spectrum_basename + '-denoised.csv')
+    if args.blanks:
+        generate_full_report(spectrum, spectrum_basename, path1, blank_subtracted, path2)
+    else:
+        generate_full_report(spectrum, spectrum_basename, path1)
+        
     if args.show_graph:
         plt.show()

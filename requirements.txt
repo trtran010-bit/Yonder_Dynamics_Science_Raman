@@ -4,3 +4,4 @@ scipy
 matplotlib
 PyWavelets
 pyserial
+python-pptx
