@@ -2,7 +2,7 @@ import argparse
 from unicodedata import name
 
 SPEC_CALLIBRATION = [0, -0.00000383008, -0.179129, 717.783]
-DEFAULT_BLANK_SUB_FAC = 2.0
+DEFAULT_BLANK_SUB_FAC = 1.0
 
 def pos_int(v):
     v = int(v)
@@ -274,10 +274,10 @@ class RamanDenoiser:
         self.wavenumbers = self.wavenumbers[mask]
 
     def subtract_blanks(self, blanks, factor):
-        valid_blanks = (blank for blank in blanks if blank is not None)
+        valid_blanks = [blank for blank in blanks if blank is not None]
         if not valid_blanks:
-                    print("No valid blanks provided")
-                    return
+            print("No valid blanks provided")
+            return
         if any(np.any(blank.wavenumbers != self.wavenumbers) for blank in valid_blanks):
             raise ValueError('Wavenumber lists of operands do not match')
         
@@ -285,10 +285,9 @@ class RamanDenoiser:
         for blank in valid_blanks:
             if abs(blank.intensities.max() - 1.0) > 1e-5:
                 raise ValueError('Blanks must be max-normalized')
-        f = factor if factor is not None else 1.0
 
         avg_blank_intensities = np.mean([blank.intensities for blank in valid_blanks], axis=0)
-        self.intensities = np.maximum(self.intensities - avg_blank_intensities * f, 0)
+        self.intensities = np.maximum(self.intensities - avg_blank_intensities * factor, 0)
 
     def find_peaks(self):
         signal_dir = np.sign(np.diff(self.intensities))
