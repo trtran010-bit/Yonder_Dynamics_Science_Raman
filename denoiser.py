@@ -1,7 +1,8 @@
 import argparse
+from unicodedata import name
 
 SPEC_CALLIBRATION = [0, -0.00000383008, -0.179129, 717.783]
-DEFAULT_BLANK_SUB_FAC = 2.0
+DEFAULT_BLANK_SUB_FAC = 1.0
 
 def pos_int(v):
     v = int(v)
@@ -21,49 +22,23 @@ if __name__ == '__main__':
         prog='raman_analyze',
         description='Analyzes Raman spectrography data',
     )
-    input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument(
-        '-s', '--from-spec',
-        action='store_true',
-        help=(
-            'If given, data is read from the spectrometer. --integration-time and --num-avgs '
-            'configure the settings used to read the spectrum. Must not be given with '
-            '--spectrum-file.'
-        ),
-    )
-    input_group.add_argument(
-        '-f', '--spectrum-file',
-        dest='spectrum',
+    parser.add_argument(
+        'spectrum',
+        nargs='+',
         help=(
             'If given, data is read from SPECTRUM_FILE, which is interpreted as a Spectrum '
-            'Studio CSV of analyte spectrum. Must not be given with --from-spec. '
-            'Callibration coefficients: '
-        ) + ', '.join(f'C{i} = {c}' for i, c in zip(range(3, -1, -1), SPEC_CALLIBRATION)),
-    )
-    parser.add_argument(
-        '-i', '--integration-time',
-        type=pos_int,
-        help=(
-            'Integration time when reading from spectrometer. Must not be given '
-            'with --spectrum-file.'
-        ),
-    )
-    parser.add_argument(
-        '-n', '--num-avgs',
-        type=pos_int,
-        help=(
-            'Number of averages when reading from spectrometer. Must not be given '
-            'with --spectrum-file.'
+            'Studio CSV of analyte spectrum.'
         ),
     )
     parser.add_argument(
         '--blank',
         dest='blanks',
+        nargs='+',
         help=(
             'Path to Spectrum Studio CSV of blank spectrum, used in blank subtraction if given. '
             'If specified multiple times, the normalized average is used as the blank.'
         ),
-        action='append',
+        # action='append',
     )
     parser.add_argument(
         '--blank-factor',
@@ -72,12 +47,6 @@ if __name__ == '__main__':
             'Scaling factor for blank subtraction. Larger number -> harsher subtraction. Defaults '
             f'to {DEFAULT_BLANK_SUB_FAC}.'
         ),
-    )
-    parser.add_argument(
-        '--no-show',
-        dest='show_graph',
-        action='store_false',
-        help='Do not show the graph onscreen',
     )
     parser.add_argument(
         '--hide',
@@ -92,10 +61,6 @@ if __name__ == '__main__':
         help='Output directory. Defaults to saving in same folder as input files.'
     )
     args = parser.parse_args()
-    if (args.num_avgs or args.integration_time) and args.spectrum:
-        parser.error(
-            'Cannot specify spectrometer settings when reading data from file.'
-        )
     if args.blank_factor is not None and not args.blanks:
         parser.error(
             'Cannot specify blank factor when not using blank subtraction. '
@@ -103,10 +68,6 @@ if __name__ == '__main__':
         )
     if args.blank_factor is None:
         args.blank_factor = DEFAULT_BLANK_SUB_FAC
-    if args.integration_time is None:
-        args.integration_time = 10000
-    if args.num_avgs is None:
-        args.num_avgs = 3
 
 from matplotlib.lines import Line2D
 from scipy import signal, sparse
@@ -271,12 +232,20 @@ class RamanDenoiser:
         self.wavenumbers = self.wavenumbers[mask]
 
     def subtract_blanks(self, blanks, factor):
-        if any(np.any(blank.wavenumbers != self.wavenumbers) for blank in blanks):
+        valid_blanks = [blank for blank in blanks if blank is not None]
+        if not valid_blanks:
+            print("No valid blanks provided")
+            return
+        if any(np.any(blank.wavenumbers != self.wavenumbers) for blank in valid_blanks):
             raise ValueError('Wavenumber lists of operands do not match')
-        if any(blank.intensities.max() != 1 for blank in blanks):
-            raise ValueError('Blanks must be max-normalized')
-        blank = np.mean([blank.intensities for blank in blanks], axis=0)
-        self.intensities = np.maximum(self.intensities - blank * factor, 0)
+        
+        #normalizing check - if any blank is not max-normalized, raise error.
+        for blank in valid_blanks:
+            if abs(blank.intensities.max() - 1.0) > 1e-5:
+                raise ValueError('Blanks must be max-normalized')
+
+        avg_blank_intensities = np.mean([blank.intensities for blank in valid_blanks], axis=0)
+        self.intensities = np.maximum(self.intensities - avg_blank_intensities * factor, 0)
 
     def find_peaks(self):
         signal_dir = np.sign(np.diff(self.intensities))
@@ -393,109 +362,122 @@ def raman_analysis(denoiser):
     #peaks, properties = denoiser.find_peaks(prominence=0.1, distance=20)
     #print(f"Found {len(peaks)} peaks")
 
-def generate_full_report(spectrum_obj, output_basename, standard_graph, blank_sub_obj=None, blank_graph=None):
+def generate_full_report(prs, spectrum_obj, output_basename, standard_graph, blank_sub_obj=None, blank_graph=None):
     """
     The master reporting function. 
     Creates the presentation, adds the data, and saves the file.
     """
-    prs = Presentation()
-
     #title slide
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = "Raman Spectroscopy Analysis Report"
-    slide.placeholders[1].text = f"Sample: {output_basename}"
+    slide = prs.slides.add_slide(prs.slide_layouts[5])
+    slide.shapes.title.text = f"Raman Analysis Report: {output_basename}"
 
     #internal helper to add content slides
-    def add_content(denoiser, title_prefix, graph_path):
+    def add_content(prs_internal, denoiser, title_prefix, graph_path):
         # Graph Slide
-        s1 = prs.slides.add_slide(prs.slide_layouts[5])
+        s1 = prs_internal.slides.add_slide(prs_internal.slide_layouts[5])
         s1.shapes.title.text = f"{title_prefix}: Spectrum Graph"
         s1.shapes.add_picture(graph_path, Inches(0.5), Inches(1.5), width=Inches(9))
         
         #table
-        s2 = prs.slides.add_slide(prs.slide_layouts[5])
+        s2 = prs_internal.slides.add_slide(prs_internal.slide_layouts[5])
         s2.shapes.title.text = f"{title_prefix}: Peak Data"
+        
         peaks = denoiser.find_all_peaks_unbiased()[:10]
         table = s2.shapes.add_table(len(peaks)+1, 3, Inches(1), Inches(1.5), Inches(8), Inches(4)).table
+        
         table.cell(0, 0).text = "Shift (cm⁻¹)"
         table.cell(0, 1).text = "Intensity"
         table.cell(0, 2).text = "Relative %"
+        
         for i, p in enumerate(peaks):
             table.cell(i+1, 0).text = f"{p['wavenumber']:.1f}"
             table.cell(i+1, 1).text = f"{p['intensity']:.2f}"
             table.cell(i+1, 2).text = f"{p['relative_intensity']:.1%}"
 
     #add the Standard Data
-    add_content(spectrum_obj, "Standard Analysis", standard_graph)
-
+    add_content(prs, spectrum_obj, "Standard Analysis", standard_graph)
     #add the Blank Subtracted Data (if applicable))
     if blank_sub_obj and blank_graph:
-        add_content(blank_sub_obj, "Blank Subtracted", blank_graph)
-
-    #save the file
-    pptx_name = f"{output_basename}_Report.pptx"
-    prs.save(pptx_name)
-    print(f"Successfully generated combined report: {pptx_name}")
+        add_content(prs, blank_sub_obj, "Blank Subtracted", blank_graph)
 
 if __name__ == "__main__":
-    if args.spectrum:
-        spectrum_fn_split = args.spectrum.split('.')
-        spectrum_basename = '.'.join(
-            spectrum_fn_split[slice(None, -1 if len(spectrum_fn_split) > 1 else None)]
-        )
+    #presentation creation
+    args = parser.parse_args()
+
+    prs = Presentation()
+    title_slidet = prs.slides.add_slide(prs.slide_layouts[0])
+    title_slidet.shapes.title.text = "Spectrum Analysis Report"
+    
+    #load blanks before loop starts
+    blanks = []
+    if args.blanks:
+            for blank_path in args.blanks:
+                print(f"Loading blank spectrum: {blank_path}")
+                
+                blank_item = RamanDenoiser.from_csv(
+                    blank_path,
+                    wavenumber_col=1,
+                    intensity_col=3,
+                    skiprows=5
+                )
+                raman_analysis(blank_item)
+                blanks.append(blank_item)
+
+    #loop through every file
+    spectrum_files = args.spectrum if isinstance(args.spectrum, list) else [args.spectrum]
+
+    for spec_file in spectrum_files: 
+        print(f"\nProcessing: {spec_file}")
+
+        path_obj = pathlib.Path(spec_file)
+        current_basename = path_obj.stem
+
+        if args.output:
+            output_dir = pathlib.Path(args.output)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path_prefix = str(output_dir / current_basename)
+        else:
+            output_path_prefix = current_basename
+        
         spectrum = RamanDenoiser.from_csv(
-            args.spectrum,
+            spec_file,
             wavenumber_col=1,
             intensity_col=3,
             skiprows=5
         )
-    else:
-        spectrum_basename = 'spectrum'
-        spectrum = RamanDenoiser.from_spectrometer(args.integration_time, args.num_avgs)
-    if args.output:
-        pathlib.Path(args.output).mkdir(parents=True, exist_ok=True)
-        spectrum_basename = str(pathlib.Path(args.output) / pathlib.Path(spectrum_basename).name)
-    raman_analysis(spectrum)
-    fig, axs, lines = spectrum.plot_comparison(label=("No blank sub" if args.blanks else None))
-
-    #saving standard graph
-    path1 = spectrum_basename + '-standard.png'
-    fig.tight_layout()
-    fig.savefig(path1, dpi=300, bbox_inches='tight')
-    print(f"Saved standard figure to {path1}")
-
-    #blank subtraction and graphing
-    blank_subtracted = None 
-    path2 = None
-
-    if args.blanks is not None:
-        blanks = [
-            RamanDenoiser.from_csv(
-                blank,
-                wavenumber_col=1,
-                intensity_col=3,
-                skiprows=5
-            )
-            for blank in args.blanks
-        ]
-        for blank in blanks:
-            raman_analysis(blank)
-        blank_subtracted = spectrum.clone()
-        blank_subtracted.subtract_blanks(blanks, args.blank_factor)
-        blank_subtracted.plot_comparison(fig_axs=(fig, axs, lines), label="Blank subtracted")
-
-        #updated graph with both lines saved
-        path2 = spectrum_basename + '-blank-subtracted.png'
-        fig.tight_layout()
-        fig.savefig(path2, dpi=300, bbox_inches='tight')
-        print(f"Saved blank-subtracted figure to {path2}")
-    
-    #generating report
-    spectrum.save_to_file(spectrum_basename + '-denoised.csv')
-    if args.blanks:
-        generate_full_report(spectrum, spectrum_basename, path1, blank_subtracted, path2)
-    else:
-        generate_full_report(spectrum, spectrum_basename, path1)
         
-    if args.show_graph:
-        plt.show()
+        raman_analysis(spectrum)
+        fig, axs, lines = spectrum.plot_comparison(label="Standard processing")
+        
+        path1 = output_path_prefix + '-standard.png'
+        fig.tight_layout()
+        fig.savefig(path1, dpi=300, bbox_inches='tight')
+        print(f"Saved standard figure to {path1}")
+
+        #blank subtraction and graphing
+        blank_subtracted = None 
+        path2 = None
+
+        if blanks:
+            blank_subtracted = spectrum.clone()
+            factor = args.blank_factor if args.blank_factor is not None else 1.0
+            blank_subtracted.subtract_blanks(blanks, factor)
+            blank_subtracted.plot_comparison(fig_axs=(fig, axs, lines), label="Blank subtracted")
+
+            #updated graph with both lines saved
+            path2 = output_path_prefix + '-blank-subtracted.png'
+            fig.tight_layout()
+            fig.savefig(path2, dpi=300, bbox_inches='tight')
+            print(f"Saved blank-subtracted figure to {path2}")
+        
+        #generating report
+        generate_full_report(prs, spectrum, current_basename, path1, blank_subtracted, path2)
+
+        spectrum.save_to_file(output_path_prefix + '-denoised.csv')
+        plt.close(fig)
+        
+    final_pptx = "report.pptx"
+    if args.output:
+        final_pptx = str(pathlib.Path(args.output) / final_pptx)
+
+    prs.save(final_pptx)
