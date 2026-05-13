@@ -22,40 +22,12 @@ if __name__ == '__main__':
         prog='raman_analyze',
         description='Analyzes Raman spectrography data',
     )
-    input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument(
-        '-s', '--from-spec',
-        action='store_true',
-        help=(
-            'If given, data is read from the spectrometer. --integration-time and --num-avgs '
-            'configure the settings used to read the spectrum. Must not be given with '
-            '--spectrum-file.'
-        ),
-    )
-    input_group.add_argument(
-        '-f', '--spectrum-file',
-        dest='spectrum',
+    parser.add_argument(
+        'spectrum',
         nargs='+',
         help=(
             'If given, data is read from SPECTRUM_FILE, which is interpreted as a Spectrum '
-            'Studio CSV of analyte spectrum. Must not be given with --from-spec. '
-            'Callibration coefficients: '
-        ) + ', '.join(f'C{i} = {c}' for i, c in zip(range(3, -1, -1), SPEC_CALLIBRATION)),
-    )
-    parser.add_argument(
-        '-i', '--integration-time',
-        type=pos_int,
-        help=(
-            'Integration time when reading from spectrometer. Must not be given '
-            'with --spectrum-file.'
-        ),
-    )
-    parser.add_argument(
-        '-n', '--num-avgs',
-        type=pos_int,
-        help=(
-            'Number of averages when reading from spectrometer. Must not be given '
-            'with --spectrum-file.'
+            'Studio CSV of analyte spectrum.'
         ),
     )
     parser.add_argument(
@@ -77,12 +49,6 @@ if __name__ == '__main__':
         ),
     )
     parser.add_argument(
-        '--no-show',
-        dest='show_graph',
-        action='store_false',
-        help='Do not show the graph onscreen',
-    )
-    parser.add_argument(
         '--hide',
         dest='hide_peak_classes',
         action='append',
@@ -95,10 +61,6 @@ if __name__ == '__main__':
         help='Output directory. Defaults to saving in same folder as input files.'
     )
     args = parser.parse_args()
-    if (args.num_avgs or args.integration_time) and args.spectrum:
-        parser.error(
-            'Cannot specify spectrometer settings when reading data from file.'
-        )
     if args.blank_factor is not None and not args.blanks:
         parser.error(
             'Cannot specify blank factor when not using blank subtraction. '
@@ -106,10 +68,6 @@ if __name__ == '__main__':
         )
     if args.blank_factor is None:
         args.blank_factor = DEFAULT_BLANK_SUB_FAC
-    if args.integration_time is None:
-        args.integration_time = 10000
-    if args.num_avgs is None:
-        args.num_avgs = 3
 
 from matplotlib.lines import Line2D
 from scipy import signal, sparse
@@ -518,11 +476,8 @@ if __name__ == "__main__":
         spectrum.save_to_file(output_path_prefix + '-denoised.csv')
         plt.close(fig)
         
-    final_pttx = "Final Report.pptx"
+    final_pptx = "report.pptx"
     if args.output:
-        final_pttx = str(pathlib.Path(args.output) / final_pttx)
+        final_pptx = str(pathlib.Path(args.output) / final_pptx)
 
-    prs.save(final_pttx)
-        
-    # if args.show_graph:
-    #     plt.show()
+    prs.save(final_pptx)
