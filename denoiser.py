@@ -1,5 +1,4 @@
 import argparse
-from unicodedata import name
 
 SPEC_CALLIBRATION = [0, -0.00000383008, -0.179129, 717.783]
 DEFAULT_BLANK_SUB_FAC = 1.0
@@ -201,11 +200,11 @@ class RamanDenoiser:
 
     def als_baseline(self, lam=1e6, p=0.01, niter=10):
         L = len(self.intensities)
-        D = sparse.diags([1, -2, 1], [0, -1, -2], shape=(L, L-2), dtype=np.float64)
+        D = sparse.diags([1, -2, 1], [0, -1, -2], shape=(L, L-2), dtype=np.float64, format='csc')
         w = np.ones(L)
 
         for i in range(niter):
-            W = sparse.spdiags(w, 0, L, L)
+            W = sparse.spdiags(w, 0, L, L, format='csc')
             Z = W + lam * D.dot(D.transpose())
             baseline = spsolve(Z, w * self.intensities)
             w = p * (self.intensities > baseline) + (1 - p) * (self.intensities < baseline)
@@ -351,7 +350,7 @@ class RamanDenoiser:
             'intensity': self.intensities
         })
         df.to_csv(filepath, index=False)
-        print(f"saved processed spectrum to {filepath}")
+        print(f"Saved processed spectrum to {filepath}")
 
 def raman_analysis(denoiser):
     denoiser.als_baseline(lam=1e5, p=0.01)
