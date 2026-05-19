@@ -1,4 +1,5 @@
 import argparse
+import multiprocessing
 
 SPEC_CALLIBRATION = [0, -0.00000383008, -0.179129, 717.783]
 DEFAULT_BLANK_SUB_FAC = 1.0
@@ -37,7 +38,6 @@ if __name__ == '__main__':
             'Path to Spectrum Studio CSV of blank spectrum, used in blank subtraction if given. '
             'If specified multiple times, the normalized average is used as the blank.'
         ),
-        # action='append',
     )
     parser.add_argument(
         '--blank-factor',
@@ -56,6 +56,12 @@ if __name__ == '__main__':
         help='Hides a peak classification',
     )
     parser.add_argument(
+        '-j', '--jobs',
+        nargs='?',
+        const=multiprocessing.cpu_count(),
+        type=pos_int,
+    )
+    parser.add_argument(
         '-o', '--output',
         help='Output directory. Defaults to saving in same folder as input files.'
     )
@@ -69,19 +75,19 @@ if __name__ == '__main__':
         args.blank_factor = DEFAULT_BLANK_SUB_FAC
 
 from matplotlib.lines import Line2D
+from pptx import Presentation
+from pptx.util import Inches, Pt
 from scipy import signal, sparse
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import hilbert, firwin, lfilter
 from scipy.sparse.linalg import spsolve
-import pathlib
+import contextlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pathlib
 import pywt
 import sys
-from spectrometer_decode import read_spectrometer, find_port
-from pptx import Presentation
-from pptx.util import Inches, Pt
 
 class RamanDenoiser:
     def __init__(self, wavelengths=None, intensities=None):
@@ -399,6 +405,54 @@ def generate_full_report(prs, spectrum_obj, output_basename, standard_graph, bla
     if blank_sub_obj and blank_graph:
         add_content(prs, blank_sub_obj, "Blank Subtracted", blank_graph)
 
+def generate_slide(spec_file, args, blanks):
+    print(f"\nProcessing: {spec_file}")
+
+    path_obj = pathlib.Path(spec_file)
+    current_basename = path_obj.stem
+
+    if args.output:
+        output_dir = pathlib.Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path_prefix = str(output_dir / current_basename)
+    else:
+        output_path_prefix = current_basename
+    
+    spectrum = RamanDenoiser.from_csv(
+        spec_file,
+        wavenumber_col=1,
+        intensity_col=3,
+        skiprows=5
+    )
+    
+    raman_analysis(spectrum)
+    fig, axs, lines = spectrum.plot_comparison(label="Standard processing")
+    
+    path1 = output_path_prefix + '-standard.png'
+    fig.tight_layout()
+    fig.savefig(path1, dpi=300, bbox_inches='tight')
+    print(f"Saved standard figure to {path1}")
+
+    #blank subtraction and graphing
+    blank_subtracted = None 
+    path2 = None
+
+    if blanks:
+        blank_subtracted = spectrum.clone()
+        factor = args.blank_factor if args.blank_factor is not None else 1.0
+        blank_subtracted.subtract_blanks(blanks, factor)
+        blank_subtracted.plot_comparison(fig_axs=(fig, axs, lines), label="Blank subtracted")
+
+        #updated graph with both lines saved
+        path2 = output_path_prefix + '-blank-subtracted.png'
+        fig.tight_layout()
+        fig.savefig(path2, dpi=300, bbox_inches='tight')
+        print(f"Saved blank-subtracted figure to {path2}")
+    
+    spectrum.save_to_file(output_path_prefix + '-denoised.csv')
+    plt.close(fig)
+    return (spectrum, current_basename, path1, blank_subtracted, path2)
+
 if __name__ == "__main__":
     #presentation creation
     args = parser.parse_args()
@@ -425,55 +479,14 @@ if __name__ == "__main__":
     #loop through every file
     spectrum_files = args.spectrum if isinstance(args.spectrum, list) else [args.spectrum]
 
-    for spec_file in spectrum_files: 
-        print(f"\nProcessing: {spec_file}")
-
-        path_obj = pathlib.Path(spec_file)
-        current_basename = path_obj.stem
-
-        if args.output:
-            output_dir = pathlib.Path(args.output)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path_prefix = str(output_dir / current_basename)
+    with contextlib.ExitStack() as es:
+        if args.jobs is not None:
+            pool = es.enter_context(multiprocessing.Pool(args.jobs))
+            calls = pool.starmap(generate_slide, [(spec_file, args, blanks) for spec_file in spectrum_files])
         else:
-            output_path_prefix = current_basename
-        
-        spectrum = RamanDenoiser.from_csv(
-            spec_file,
-            wavenumber_col=1,
-            intensity_col=3,
-            skiprows=5
-        )
-        
-        raman_analysis(spectrum)
-        fig, axs, lines = spectrum.plot_comparison(label="Standard processing")
-        
-        path1 = output_path_prefix + '-standard.png'
-        fig.tight_layout()
-        fig.savefig(path1, dpi=300, bbox_inches='tight')
-        print(f"Saved standard figure to {path1}")
-
-        #blank subtraction and graphing
-        blank_subtracted = None 
-        path2 = None
-
-        if blanks:
-            blank_subtracted = spectrum.clone()
-            factor = args.blank_factor if args.blank_factor is not None else 1.0
-            blank_subtracted.subtract_blanks(blanks, factor)
-            blank_subtracted.plot_comparison(fig_axs=(fig, axs, lines), label="Blank subtracted")
-
-            #updated graph with both lines saved
-            path2 = output_path_prefix + '-blank-subtracted.png'
-            fig.tight_layout()
-            fig.savefig(path2, dpi=300, bbox_inches='tight')
-            print(f"Saved blank-subtracted figure to {path2}")
-        
-        #generating report
-        generate_full_report(prs, spectrum, current_basename, path1, blank_subtracted, path2)
-
-        spectrum.save_to_file(output_path_prefix + '-denoised.csv')
-        plt.close(fig)
+            calls = [generate_slide(spec_file, args, blanks) for spec_file in spectrum_files]
+    for call in calls:
+        generate_full_report(prs, *call)
         
     final_pptx = "report.pptx"
     if args.output:
