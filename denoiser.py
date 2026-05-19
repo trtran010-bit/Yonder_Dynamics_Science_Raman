@@ -243,7 +243,7 @@ class RamanDenoiser:
             return
         if any(np.any(blank.wavenumbers != self.wavenumbers) for blank in valid_blanks):
             raise ValueError('Wavenumber lists of operands do not match')
-        
+
         #normalizing check - if any blank is not max-normalized, raise error.
         for blank in valid_blanks:
             if abs(blank.intensities.max() - 1.0) > 1e-5:
@@ -369,7 +369,7 @@ def raman_analysis(denoiser):
 
 def generate_full_report(prs, spectrum_obj, output_basename, standard_graph, blank_sub_obj=None, blank_graph=None):
     """
-    The master reporting function. 
+    The master reporting function.
     Creates the presentation, adds the data, and saves the file.
     """
     #title slide
@@ -382,18 +382,18 @@ def generate_full_report(prs, spectrum_obj, output_basename, standard_graph, bla
         s1 = prs_internal.slides.add_slide(prs_internal.slide_layouts[5])
         s1.shapes.title.text = f"{title_prefix}: Spectrum Graph"
         s1.shapes.add_picture(graph_path, Inches(0.5), Inches(1.5), width=Inches(9))
-        
+
         #table
         s2 = prs_internal.slides.add_slide(prs_internal.slide_layouts[5])
         s2.shapes.title.text = f"{title_prefix}: Peak Data"
-        
+
         peaks = denoiser.find_all_peaks_unbiased()[:10]
         table = s2.shapes.add_table(len(peaks)+1, 3, Inches(1), Inches(1.5), Inches(8), Inches(4)).table
-        
+
         table.cell(0, 0).text = "Shift (cm⁻¹)"
         table.cell(0, 1).text = "Intensity"
         table.cell(0, 2).text = "Relative %"
-        
+
         for i, p in enumerate(peaks):
             table.cell(i+1, 0).text = f"{p['wavenumber']:.1f}"
             table.cell(i+1, 1).text = f"{p['intensity']:.2f}"
@@ -417,24 +417,24 @@ def generate_slide(spec_file, args, blanks):
         output_path_prefix = str(output_dir / current_basename)
     else:
         output_path_prefix = current_basename
-    
+
     spectrum = RamanDenoiser.from_csv(
         spec_file,
         wavenumber_col=1,
         intensity_col=3,
         skiprows=5
     )
-    
+
     raman_analysis(spectrum)
     fig, axs, lines = spectrum.plot_comparison(label="Standard processing")
-    
+
     path1 = output_path_prefix + '-standard.png'
     fig.tight_layout()
     fig.savefig(path1, dpi=300, bbox_inches='tight')
     print(f"Saved standard figure to {path1}")
 
     #blank subtraction and graphing
-    blank_subtracted = None 
+    blank_subtracted = None
     path2 = None
 
     if blanks:
@@ -448,7 +448,7 @@ def generate_slide(spec_file, args, blanks):
         fig.tight_layout()
         fig.savefig(path2, dpi=300, bbox_inches='tight')
         print(f"Saved blank-subtracted figure to {path2}")
-    
+
     spectrum.save_to_file(output_path_prefix + '-denoised.csv')
     plt.close(fig)
     return (spectrum, current_basename, path1, blank_subtracted, path2)
@@ -460,13 +460,13 @@ if __name__ == "__main__":
     prs = Presentation()
     title_slidet = prs.slides.add_slide(prs.slide_layouts[0])
     title_slidet.shapes.title.text = "Spectrum Analysis Report"
-    
+
     #load blanks before loop starts
     blanks = []
     if args.blanks:
             for blank_path in args.blanks:
                 print(f"Loading blank spectrum: {blank_path}")
-                
+
                 blank_item = RamanDenoiser.from_csv(
                     blank_path,
                     wavenumber_col=1,
@@ -487,7 +487,7 @@ if __name__ == "__main__":
             calls = [generate_slide(spec_file, args, blanks) for spec_file in spectrum_files]
     for call in calls:
         generate_full_report(prs, *call)
-        
+
     final_pptx = "report.pptx"
     if args.output:
         final_pptx = str(pathlib.Path(args.output) / final_pptx)
